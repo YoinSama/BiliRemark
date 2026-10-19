@@ -59,9 +59,19 @@ function buildCss(theme: ThemeInfo): string {
   const p = paletteOf(theme, 'auto')
   return `
 /* ===== BiliRemark 样式（全部 brmk- 前缀，不覆盖页面既有样式） ===== */
+/* 页面内浮层：徽标 / 铅笔都挂在这里，绝不进入 B 站自己的容器 */
+#brmk-layer{
+  position:fixed; left:0; top:0; width:100%; height:100%;
+  z-index:99997; pointer-events:none; overflow:visible;
+  contain:layout style;
+}
+#brmk-layer>.brmk-badge,#brmk-layer>.brmk-pencil{
+  position:absolute; left:0; top:0; margin:0; pointer-events:auto;
+  will-change:transform; transform:translate3d(0,0,0);
+}
 .brmk-badge{
   display:inline-flex; align-items:center; gap:4px;
-  margin-left:6px; padding:0 7px; height:18px; max-width:min(240px, 100%);
+  margin:0; padding:0 7px; height:18px; max-width:min(240px, 100%);
   border-radius:9px; vertical-align:middle;
   font-family:${FONT_STACK}; font-size:12px; font-weight:500; line-height:16px;
   letter-spacing:0; white-space:nowrap; cursor:pointer; user-select:none;
@@ -91,10 +101,13 @@ function buildCss(theme: ThemeInfo): string {
   white-space:nowrap; max-width:80px; overflow:hidden; text-overflow:ellipsis;
 }
 .brmk-badge .brmk-more{ font-size:10px; opacity:.7; }
+/* 浮层给的空间不够时（portal 打的标记），先让位给备注名，标签胶囊收起 */
+.brmk-badge[data-brmk-tight] .brmk-tags{ display:none; }
+.brmk-badge[data-brmk-tight] .brmk-name{ max-width:100%; }
 
 .brmk-pencil{
   display:inline-flex; align-items:center; justify-content:center;
-  width:16px; height:16px; margin-left:6px; padding:0; border:0; border-radius:50%;
+  width:16px; height:16px; margin:0; padding:0; border:0; border-radius:50%;
   vertical-align:middle; cursor:pointer; opacity:0; pointer-events:none;
   color:${p.fg2}; background:${p.bg3};
   transition:opacity .14s ease, background .14s ease, color .14s ease;

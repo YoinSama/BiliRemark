@@ -3,6 +3,7 @@ import { pageUpMid, pageUpName, resolveFromElement, snapshotNickname } from '../
 import { rememberNick, setDiagnostic, type SceneDiagnostic } from '../core/runtime'
 import { store } from '../core/store'
 import { badgeOptions, ensurePencil, renderBadge } from '../ui/badge'
+import * as portal from '../ui/portal'
 import { isVisible, qs, qsa } from '../util/dom'
 
 /** 主 UP 主信息区容器：刻意不含推荐卡片，避免 M1 越界去改卡片场景（S5） */
@@ -117,5 +118,5 @@ export function scanVideoUp(): SceneDiagnostic {
 
 /** 关闭场景或全局开关时，移除本场景注入的铅笔入口（徽标由全局清理） */
 export function clearVideoUpPencils(): void {
-  for (const el of Array.from(document.querySelectorAll('.brmk-pencil'))) el.remove()
+  portal.clearSlot('pencil')
 }

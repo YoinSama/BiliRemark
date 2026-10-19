@@ -1,0 +1,390 @@
+/**
+ * 页面内浮层（portal）：徽标 / 铅笔全部挂在 body 下的 #brmk-layer 里，
+ * 用绝对定位贴到目标元素旁边 —— 一个节点都不插进 B 站自己的容器。
+ *
+ * 为什么必须这么做：B 站视频页是 Vue 2，且部分代码按 nextSibling / childNodes
+ * 下标定位兄弟节点。往容器里插一个兄弟节点会让它的 patch 落到错位的节点上
+ * （实测把 <i> appendChild 到一段空白文本节点，抛 HierarchyRequestError，
+ * 整条更新链中断 → 评论区 / 推荐封面 / 头像全部不挂载）。浮层方案从根上避开这类风险。
+ */
+import { getSettings } from '../core/config'
+
+export type Slot = 'badge' | 'pencil'
+
+const SLOTS: Slot[] = ['badge', 'pencil']
+/** 与锚点的间距 */
+const GAP = 6
+/** 还能显示点东西的最小宽度，比这窄就换位置 */
+const MIN_W = 60
+/** 离视口边缘的安全距离 */
+const MARGIN = 4
+/** 布局会随图片加载 / 异步渲染变化，没有 mutation 也得重新定位 */
+const POLL_MS = 200
+
+interface AnchorSlots {
+  badge: HTMLElement | null
+  pencil: HTMLElement | null
+}
+
+const byAnchor = new Map<Element, AnchorSlots>()
+const byEl = new WeakMap<HTMLElement, { anchor: Element; slot: Slot }>()
+const lastPos = new WeakMap<HTMLElement, string>()
+
+let layer: HTMLElement | null = null
+let rafId = 0
+let pollTimer: number | null = null
+let bound = false
+
+function ensureLayer(): HTMLElement | null {
+  if (layer && layer.isConnected) return layer
+  if (!document.body) return null
+  let el = document.getElementById('brmk-layer')
+  if (!el) {
+    el = document.createElement('div')
+    el.id = 'brmk-layer'
+    document.body.appendChild(el)
+  }
+  el.style.zIndex = String(Math.max(1000, getSettings().manager.zIndex - 2))
+  layer = el
+  return layer
+}
+
+function onViewportChange(): void {
+  schedule()
+}
+
+function bind(): void {
+  if (bound) return
+  bound = true
+  // capture 才能收到页面内部滚动容器（评论区等）的 scroll
+  window.addEventListener('scroll', onViewportChange, { passive: true, capture: true })
+  window.addEventListener('resize', onViewportChange, { passive: true })
+  try {
+    window.visualViewport?.addEventListener('resize', onViewportChange, { passive: true })
+  } catch {
+    /* 老浏览器没有 visualViewport */
+  }
+}
+
+function ensurePoll(): void {
+  if (pollTimer !== null) return
+  pollTimer = window.setInterval(() => {
+    if (document.hidden) return
+    sync()
+  }, POLL_MS)
+}
+
+function stopPoll(): void {
+  if (pollTimer === null) return
+  window.clearInterval(pollTimer)
+  pollTimer = null
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), Math.max(min, max))
+}
+
+function hide(el: HTMLElement): void {
+  if (el.style.visibility === 'hidden') return
+  el.style.visibility = 'hidden'
+  el.style.pointerEvents = 'none'
+  lastPos.delete(el)
+}
+
+function show(el: HTMLElement): void {
+  if (el.style.visibility !== 'hidden') return
+  el.style.visibility = 'visible'
+  el.style.pointerEvents = ''
+}
+
+/** 同一父容器里锚点之后的元素是否会和候选矩形撞上 */
+function blockedBySibling(anchor: Element, x: number, y: number, w: number, h: number): boolean {
+  const parent = anchor.parentElement
+  if (!parent) return false
+  const right = x + w
+  const bottom = y + h
+  let checked = 0
+  for (const sib of Array.from(parent.children)) {
+    if (sib === anchor) continue
+    if (sib.classList.contains('brmk-badge') || sib.classList.contains('brmk-pencil')) continue
+    if (checked++ >= 8) break
+    const s = sib.getBoundingClientRect()
+    if (!s.width && !s.height) continue
+    if (x < s.right && right > s.left && y < s.bottom && bottom > s.top) return true
+  }
+  return false
+}
+
+/** 同一父容器里所有子元素的最右边界（≈ 这一行的末尾） */
+function rowRightOf(anchor: Element): number {
+  const own = anchor.getBoundingClientRect()
+  const parent = anchor.parentElement
+  if (!parent) return own.right
+  let right = own.right
+  let n = 0
+  for (const sib of Array.from(parent.children)) {
+    if (n++ >= 12) break
+    const s = sib.getBoundingClientRect()
+    if (s.width || s.height) right = Math.max(right, s.right)
+  }
+  return right
+}
+
+/**
+ * 选址优先级：
+ *   1. 锚点右侧（不压住同行任何兄弟）
+ *   2. 整行末尾（不压住「发消息」之类同行按钮）
+ *   3. 父容器下方
+ * 都不合适时退回锚点右侧并夹进视口。
+ */
+function place(anchor: Element, el: HTMLElement, vw: number, vh: number): void {
+  const r = anchor.getBoundingClientRect()
+  if (!r.width && !r.height) {
+    hide(el)
+    return
+  }
+  if (r.bottom < -8 || r.top > vh + 8 || r.right < -8 || r.left > vw + 8) {
+    hide(el)
+    return
+  }
+
+  // 先量自然尺寸，再决定放到哪
+  el.removeAttribute('data-brmk-tight')
+  if (el.style.maxWidth) el.style.maxWidth = ''
+  let naturalW = el.offsetWidth
+  const h = el.offsetHeight
+  if (!naturalW || !h) {
+    hide(el)
+    return
+  }
+
+  const parent = anchor.parentElement
+  const pr = parent ? parent.getBoundingClientRect() : null
+  const limitRight = Math.min(vw - MARGIN * 2, pr ? Math.max(pr.right - 2, r.right + MIN_W) : vw - MARGIN * 2)
+  const need = Math.min(naturalW, MIN_W)
+  const centeredY = Math.round(r.top + (r.height - h) / 2)
+
+  const rightX = Math.round(r.right + GAP)
+  const rowX = Math.round(rowRightOf(anchor) + GAP)
+
+  let x: number
+  let y: number
+  let maxW: number
+  let fits = true
+
+  if (limitRight - rightX >= need && !blockedBySibling(anchor, rightX, centeredY, naturalW, h)) {
+    x = rightX
+    y = centeredY
+    maxW = limitRight - x
+  } else if (limitRight - rowX >= need) {
+    x = rowX
+    y = centeredY
+    maxW = limitRight - x
+  } else if (pr) {
+    x = Math.max(MARGIN, Math.round(r.left))
+    y = Math.round(pr.bottom + 2)
+    maxW = Math.min(vw - MARGIN * 2 - x, pr.right - x)
+    if (maxW < need) {
+      fits = false
+      maxW = Math.max(need, vw - MARGIN * 2 - x)
+    }
+  } else {
+    fits = false
+    x = rightX
+    y = centeredY
+    maxW = vw - MARGIN * 2 - x
+  }
+
+  if (naturalW > maxW) {
+    // 空间不够：先让元素自己收一档（徽标会隐藏标签胶囊），收完还放不下才截断
+    el.setAttribute('data-brmk-tight', '1')
+    naturalW = el.offsetWidth || naturalW
+    if (naturalW > maxW) el.style.maxWidth = `${Math.max(MIN_W, Math.floor(maxW))}px`
+  }
+
+  const width = el.offsetWidth || naturalW
+  if (!fits) {
+    x = clamp(x, MARGIN, vw - MARGIN * 2 - width)
+    y = clamp(y, MARGIN, vh - MARGIN * 2 - h)
+  } else {
+    x = Math.max(MARGIN, x)
+    y = clamp(y, MARGIN, vh - MARGIN * 2 - h)
+  }
+
+  const sig = `${x},${y},${width}`
+  if (lastPos.get(el) !== sig) {
+    el.style.transform = `translate3d(${x}px, ${y}px, 0)`
+    lastPos.set(el, sig)
+  }
+  show(el)
+}
+
+function sync(): void {
+  if (!byAnchor.size) {
+    stopPoll()
+    return
+  }
+  const vw = document.documentElement.clientWidth || window.innerWidth
+  const vh = window.innerHeight
+  const dead: Element[] = []
+
+  for (const [anchor, slots] of byAnchor) {
+    if (!anchor.isConnected) {
+      dead.push(anchor)
+      continue
+    }
+    for (const slot of SLOTS) {
+      const el = slots[slot]
+      if (!el) continue
+      if (!el.isConnected) {
+        slots[slot] = null
+        byEl.delete(el)
+        continue
+      }
+      place(anchor, el, vw, vh)
+    }
+  }
+
+  for (const anchor of dead) dropAnchor(anchor)
+  if (!byAnchor.size) stopPoll()
+}
+
+export function schedule(): void {
+  if (rafId) return
+  rafId = requestAnimationFrame(() => {
+    rafId = 0
+    sync()
+  })
+}
+
+/** 立即重排一次（内容刚变、宽度还没量到时用） */
+export function refresh(): void {
+  sync()
+}
+
+function slotsOf(anchor: Element, create: boolean): AnchorSlots | null {
+  let slots = byAnchor.get(anchor)
+  if (!slots) {
+    if (!create) return null
+    slots = { badge: null, pencil: null }
+    byAnchor.set(anchor, slots)
+  }
+  return slots
+}
+
+/** 把元素挂到锚点旁边（同 slot 旧元素会被替换） */
+export function attach(anchor: Element, slot: Slot, el: HTMLElement): void {
+  const root = ensureLayer()
+  if (!root) return
+  bind()
+  const slots = slotsOf(anchor, true)
+  if (!slots) return
+  const old = slots[slot]
+  if (old && old !== el) {
+    old.remove()
+    byEl.delete(old)
+  }
+  slots[slot] = el
+  byEl.set(el, { anchor, slot })
+  if (el.parentElement !== root) root.appendChild(el)
+  ensurePoll()
+  refresh()
+}
+
+export function get(anchor: Element, slot: Slot): HTMLElement | null {
+  const slots = byAnchor.get(anchor)
+  const el = slots ? slots[slot] : null
+  return el && el.isConnected ? el : null
+}
+
+export function detach(anchor: Element, slot: Slot): void {
+  const slots = byAnchor.get(anchor)
+  if (!slots) return
+  const el = slots[slot]
+  if (!el) return
+  slots[slot] = null
+  byEl.delete(el)
+  el.remove()
+  if (!slots.badge && !slots.pencil) byAnchor.delete(anchor)
+}
+
+/** 移除某个元素（外部误删 / 记录被删时用） */
+export function removeEl(el: Element): void {
+  const info = byEl.get(el as HTMLElement)
+  if (info) {
+    detach(info.anchor, info.slot)
+    return
+  }
+  el.remove()
+}
+
+function dropAnchor(anchor: Element): void {
+  const slots = byAnchor.get(anchor)
+  if (slots) {
+    for (const slot of SLOTS) {
+      const el = slots[slot]
+      if (el) {
+        byEl.delete(el)
+        el.remove()
+      }
+    }
+  }
+  byAnchor.delete(anchor)
+}
+
+/** 清掉某个 slot 的全部元素 */
+export function clearSlot(slot: Slot): void {
+  for (const [anchor, slots] of Array.from(byAnchor)) {
+    const el = slots[slot]
+    if (!el) continue
+    byEl.delete(el)
+    el.remove()
+    slots[slot] = null
+    if (!slots.badge && !slots.pencil) byAnchor.delete(anchor)
+  }
+  stopPollIfEmpty()
+}
+
+/** 清空浮层（路由变化 / 关闭场景 / 卸载时用） */
+export function clear(): void {
+  for (const anchor of Array.from(byAnchor.keys())) dropAnchor(anchor)
+  byAnchor.clear()
+  if (layer) layer.textContent = ''
+  stopPollIfEmpty()
+}
+
+function stopPollIfEmpty(): void {
+  if (!byAnchor.size) stopPoll()
+}
+
+export function list(slot: Slot): HTMLElement[] {
+  if (!layer) return []
+  const cls = slot === 'badge' ? '.brmk-badge' : '.brmk-pencil'
+  return Array.from(layer.querySelectorAll<HTMLElement>(cls))
+}
+
+export function count(slot: Slot): number {
+  return list(slot).length
+}
+
+/** 卸载：断开监听与轮询（页面不会自动调用，调试用） */
+export function dispose(): void {
+  clear()
+  stopPoll()
+  if (rafId) {
+    cancelAnimationFrame(rafId)
+    rafId = 0
+  }
+  if (bound) {
+    window.removeEventListener('scroll', onViewportChange, true)
+    window.removeEventListener('resize', onViewportChange)
+    try {
+      window.visualViewport?.removeEventListener('resize', onViewportChange)
+    } catch {
+      /* ignore */
+    }
+    bound = false
+  }
+  layer?.remove()
+  layer = null
+}

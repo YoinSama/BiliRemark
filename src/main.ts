@@ -11,7 +11,7 @@ import { guard, log, warn } from './util/log'
 import { openManager, closeManager, isManagerOpen, toggleManager } from './ui/manager'
 import { mountFab } from './ui/floating'
 import { openDoctor, closeDoctor, setDoctorRescan, isDoctorOpen, doctorEnabled } from './dev/doctor'
-import { badgeCount, pruneBadges } from './ui/badge'
+import { badgeCount, clearAll, pruneBadges } from './ui/badge'
 import { toast } from './ui/toast'
 
 const VERSION = '1.0.0'
@@ -27,7 +27,7 @@ let started = false
 
 /** 我们自己插入的节点，其变动不触发重新扫描（否则会自激） */
 const OWN_SELECTOR =
-  '#brmk-manager, #brmk-editor, #brmk-toast, #brmk-doctor, #brmk-fab, #brmk-space-card, .brmk-badge, .brmk-pencil, #brmk-style'
+  '#brmk-manager, #brmk-editor, #brmk-toast, #brmk-doctor, #brmk-fab, #brmk-space-card, #brmk-layer, .brmk-badge, .brmk-pencil, #brmk-style'
 
 function isOwnNode(node: Node | null): boolean {
   if (!node) return false
@@ -59,7 +59,7 @@ function scheduleScan(delay?: number): void {
 }
 
 function clearInjected(): void {
-  for (const el of Array.from(document.querySelectorAll('.brmk-badge, .brmk-pencil'))) el.remove()
+  clearAll()
 }
 
 function scanNow(): void {

@@ -1168,6 +1168,303 @@
 		window.addEventListener("resize", onResize);
 		cleanupFns.push(() => document.removeEventListener("keydown", onKey, true), () => document.removeEventListener("pointerdown", onPointer, true), () => window.removeEventListener("resize", onResize));
 	}
+	var SLOTS = ["badge", "pencil"];
+	var GAP = 6;
+	var MIN_W = 60;
+	var MARGIN = 4;
+	var POLL_MS = 200;
+	var byAnchor = new Map();
+	var byEl = new WeakMap();
+	var lastPos = new WeakMap();
+	var layer = null;
+	var rafId = 0;
+	var pollTimer = null;
+	var bound = false;
+	function ensureLayer() {
+		if (layer && layer.isConnected) return layer;
+		if (!document.body) return null;
+		let el = document.getElementById("brmk-layer");
+		if (!el) {
+			el = document.createElement("div");
+			el.id = "brmk-layer";
+			document.body.appendChild(el);
+		}
+		el.style.zIndex = String(Math.max(1e3, getSettings().manager.zIndex - 2));
+		layer = el;
+		return layer;
+	}
+	function onViewportChange() {
+		schedule();
+	}
+	function bind$1() {
+		if (bound) return;
+		bound = true;
+		window.addEventListener("scroll", onViewportChange, {
+			passive: true,
+			capture: true
+		});
+		window.addEventListener("resize", onViewportChange, { passive: true });
+		try {
+			window.visualViewport?.addEventListener("resize", onViewportChange, { passive: true });
+		} catch {}
+	}
+	function ensurePoll() {
+		if (pollTimer !== null) return;
+		pollTimer = window.setInterval(() => {
+			if (document.hidden) return;
+			sync();
+		}, POLL_MS);
+	}
+	function stopPoll() {
+		if (pollTimer === null) return;
+		window.clearInterval(pollTimer);
+		pollTimer = null;
+	}
+	function clamp(value, min, max) {
+		return Math.min(Math.max(value, min), Math.max(min, max));
+	}
+	function hide(el) {
+		if (el.style.visibility === "hidden") return;
+		el.style.visibility = "hidden";
+		el.style.pointerEvents = "none";
+		lastPos.delete(el);
+	}
+	function show(el) {
+		if (el.style.visibility !== "hidden") return;
+		el.style.visibility = "visible";
+		el.style.pointerEvents = "";
+	}
+	function blockedBySibling(anchor, x, y, w, h) {
+		const parent = anchor.parentElement;
+		if (!parent) return false;
+		const right = x + w;
+		const bottom = y + h;
+		let checked = 0;
+		for (const sib of Array.from(parent.children)) {
+			if (sib === anchor) continue;
+			if (sib.classList.contains("brmk-badge") || sib.classList.contains("brmk-pencil")) continue;
+			if (checked++ >= 8) break;
+			const s = sib.getBoundingClientRect();
+			if (!s.width && !s.height) continue;
+			if (x < s.right && right > s.left && y < s.bottom && bottom > s.top) return true;
+		}
+		return false;
+	}
+	function rowRightOf(anchor) {
+		const own = anchor.getBoundingClientRect();
+		const parent = anchor.parentElement;
+		if (!parent) return own.right;
+		let right = own.right;
+		let n = 0;
+		for (const sib of Array.from(parent.children)) {
+			if (n++ >= 12) break;
+			const s = sib.getBoundingClientRect();
+			if (s.width || s.height) right = Math.max(right, s.right);
+		}
+		return right;
+	}
+	function place(anchor, el, vw, vh) {
+		const r = anchor.getBoundingClientRect();
+		if (!r.width && !r.height) {
+			hide(el);
+			return;
+		}
+		if (r.bottom < -8 || r.top > vh + 8 || r.right < -8 || r.left > vw + 8) {
+			hide(el);
+			return;
+		}
+		el.removeAttribute("data-brmk-tight");
+		if (el.style.maxWidth) el.style.maxWidth = "";
+		let naturalW = el.offsetWidth;
+		const h = el.offsetHeight;
+		if (!naturalW || !h) {
+			hide(el);
+			return;
+		}
+		const parent = anchor.parentElement;
+		const pr = parent ? parent.getBoundingClientRect() : null;
+		const limitRight = Math.min(vw - 8, pr ? Math.max(pr.right - 2, r.right + MIN_W) : vw - 8);
+		const need = Math.min(naturalW, MIN_W);
+		const centeredY = Math.round(r.top + (r.height - h) / 2);
+		const rightX = Math.round(r.right + GAP);
+		const rowX = Math.round(rowRightOf(anchor) + GAP);
+		let x;
+		let y;
+		let maxW;
+		let fits = true;
+		if (limitRight - rightX >= need && !blockedBySibling(anchor, rightX, centeredY, naturalW, h)) {
+			x = rightX;
+			y = centeredY;
+			maxW = limitRight - x;
+		} else if (limitRight - rowX >= need) {
+			x = rowX;
+			y = centeredY;
+			maxW = limitRight - x;
+		} else if (pr) {
+			x = Math.max(MARGIN, Math.round(r.left));
+			y = Math.round(pr.bottom + 2);
+			maxW = Math.min(vw - 8 - x, pr.right - x);
+			if (maxW < need) {
+				fits = false;
+				maxW = Math.max(need, vw - 8 - x);
+			}
+		} else {
+			fits = false;
+			x = rightX;
+			y = centeredY;
+			maxW = vw - 8 - x;
+		}
+		if (naturalW > maxW) {
+			el.setAttribute("data-brmk-tight", "1");
+			naturalW = el.offsetWidth || naturalW;
+			if (naturalW > maxW) el.style.maxWidth = `${Math.max(MIN_W, Math.floor(maxW))}px`;
+		}
+		const width = el.offsetWidth || naturalW;
+		if (!fits) {
+			x = clamp(x, MARGIN, vw - 8 - width);
+			y = clamp(y, MARGIN, vh - 8 - h);
+		} else {
+			x = Math.max(MARGIN, x);
+			y = clamp(y, MARGIN, vh - 8 - h);
+		}
+		const sig = `${x},${y},${width}`;
+		if (lastPos.get(el) !== sig) {
+			el.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+			lastPos.set(el, sig);
+		}
+		show(el);
+	}
+	function sync() {
+		if (!byAnchor.size) {
+			stopPoll();
+			return;
+		}
+		const vw = document.documentElement.clientWidth || window.innerWidth;
+		const vh = window.innerHeight;
+		const dead = [];
+		for (const [anchor, slots] of byAnchor) {
+			if (!anchor.isConnected) {
+				dead.push(anchor);
+				continue;
+			}
+			for (const slot of SLOTS) {
+				const el = slots[slot];
+				if (!el) continue;
+				if (!el.isConnected) {
+					slots[slot] = null;
+					byEl.delete(el);
+					continue;
+				}
+				place(anchor, el, vw, vh);
+			}
+		}
+		for (const anchor of dead) dropAnchor(anchor);
+		if (!byAnchor.size) stopPoll();
+	}
+	function schedule() {
+		if (rafId) return;
+		rafId = requestAnimationFrame(() => {
+			rafId = 0;
+			sync();
+		});
+	}
+	function refresh() {
+		sync();
+	}
+	function slotsOf(anchor, create) {
+		let slots = byAnchor.get(anchor);
+		if (!slots) {
+			if (!create) return null;
+			slots = {
+				badge: null,
+				pencil: null
+			};
+			byAnchor.set(anchor, slots);
+		}
+		return slots;
+	}
+	function attach(anchor, slot, el) {
+		const root = ensureLayer();
+		if (!root) return;
+		bind$1();
+		const slots = slotsOf(anchor, true);
+		if (!slots) return;
+		const old = slots[slot];
+		if (old && old !== el) {
+			old.remove();
+			byEl.delete(old);
+		}
+		slots[slot] = el;
+		byEl.set(el, {
+			anchor,
+			slot
+		});
+		if (el.parentElement !== root) root.appendChild(el);
+		ensurePoll();
+		refresh();
+	}
+	function get(anchor, slot) {
+		const slots = byAnchor.get(anchor);
+		const el = slots ? slots[slot] : null;
+		return el && el.isConnected ? el : null;
+	}
+	function detach(anchor, slot) {
+		const slots = byAnchor.get(anchor);
+		if (!slots) return;
+		const el = slots[slot];
+		if (!el) return;
+		slots[slot] = null;
+		byEl.delete(el);
+		el.remove();
+		if (!slots.badge && !slots.pencil) byAnchor.delete(anchor);
+	}
+	function removeEl(el) {
+		const info = byEl.get(el);
+		if (info) {
+			detach(info.anchor, info.slot);
+			return;
+		}
+		el.remove();
+	}
+	function dropAnchor(anchor) {
+		const slots = byAnchor.get(anchor);
+		if (slots) for (const slot of SLOTS) {
+			const el = slots[slot];
+			if (el) {
+				byEl.delete(el);
+				el.remove();
+			}
+		}
+		byAnchor.delete(anchor);
+	}
+	function clearSlot(slot) {
+		for (const [anchor, slots] of Array.from(byAnchor)) {
+			const el = slots[slot];
+			if (!el) continue;
+			byEl.delete(el);
+			el.remove();
+			slots[slot] = null;
+			if (!slots.badge && !slots.pencil) byAnchor.delete(anchor);
+		}
+		stopPollIfEmpty();
+	}
+	function clear() {
+		for (const anchor of Array.from(byAnchor.keys())) dropAnchor(anchor);
+		byAnchor.clear();
+		if (layer) layer.textContent = "";
+		stopPollIfEmpty();
+	}
+	function stopPollIfEmpty() {
+		if (!byAnchor.size) stopPoll();
+	}
+	function list(slot) {
+		if (!layer) return [];
+		const cls = slot === "badge" ? ".brmk-badge" : ".brmk-pencil";
+		return Array.from(layer.querySelectorAll(cls));
+	}
+	function count(slot) {
+		return list(slot).length;
+	}
 	var FALLBACK_RGB = [
 		251,
 		113,
@@ -1335,9 +1632,19 @@
 		const p = paletteOf(theme, "auto");
 		return `
 /* ===== BiliRemark 样式（全部 brmk- 前缀，不覆盖页面既有样式） ===== */
+/* 页面内浮层：徽标 / 铅笔都挂在这里，绝不进入 B 站自己的容器 */
+#brmk-layer{
+  position:fixed; left:0; top:0; width:100%; height:100%;
+  z-index:99997; pointer-events:none; overflow:visible;
+  contain:layout style;
+}
+#brmk-layer>.brmk-badge,#brmk-layer>.brmk-pencil{
+  position:absolute; left:0; top:0; margin:0; pointer-events:auto;
+  will-change:transform; transform:translate3d(0,0,0);
+}
 .brmk-badge{
   display:inline-flex; align-items:center; gap:4px;
-  margin-left:6px; padding:0 7px; height:18px; max-width:min(240px, 100%);
+  margin:0; padding:0 7px; height:18px; max-width:min(240px, 100%);
   border-radius:9px; vertical-align:middle;
   font-family:${FONT_STACK}; font-size:12px; font-weight:500; line-height:16px;
   letter-spacing:0; white-space:nowrap; cursor:pointer; user-select:none;
@@ -1367,10 +1674,13 @@
   white-space:nowrap; max-width:80px; overflow:hidden; text-overflow:ellipsis;
 }
 .brmk-badge .brmk-more{ font-size:10px; opacity:.7; }
+/* 浮层给的空间不够时（portal 打的标记），先让位给备注名，标签胶囊收起 */
+.brmk-badge[data-brmk-tight] .brmk-tags{ display:none; }
+.brmk-badge[data-brmk-tight] .brmk-name{ max-width:100%; }
 
 .brmk-pencil{
   display:inline-flex; align-items:center; justify-content:center;
-  width:16px; height:16px; margin-left:6px; padding:0; border:0; border-radius:50%;
+  width:16px; height:16px; margin:0; padding:0; border:0; border-radius:50%;
   vertical-align:middle; cursor:pointer; opacity:0; pointer-events:none;
   color:${p.fg2}; background:${p.bg3};
   transition:opacity .14s ease, background .14s ease, color .14s ease;
@@ -1765,19 +2075,11 @@
 			fallbackStyles.set(root, el);
 		} else el.textContent = cssText;
 	}
+	var pencilMeta = new WeakMap();
+	var anchorBound = new WeakSet();
 	var pencilBound = new WeakSet();
-	function badgeSelector(mid) {
-		return `.brmk-badge[data-brmk-mid="${mid}"]`;
-	}
-	function findNextBadge(anchor) {
-		let node = anchor.nextElementSibling;
-		let guard = 0;
-		while (node && guard++ < 4) {
-			if (node.classList.contains("brmk-badge")) return node;
-			node = node.nextElementSibling;
-		}
-		return null;
-	}
+	var hideTimers = new WeakMap();
+	var HIDE_DELAY = 220;
 	function buildBadgeContent(badge, record, options) {
 		badge.textContent = "";
 		if (options.showColorDot) badge.appendChild(h("span", "brmk-dot"));
@@ -1798,38 +2100,42 @@
 		if (record.note) titleParts.push(record.note.length > 300 ? record.note.slice(0, 300) + "…" : record.note);
 		badge.title = titleParts.join("\n");
 	}
+	function createBadge(mid, options) {
+		const badge = h("span", "brmk-badge");
+		badge.setAttribute("role", "button");
+		badge.tabIndex = 0;
+		badge.addEventListener("click", (ev) => {
+			ev.preventDefault();
+			ev.stopPropagation();
+			const id = badge.getAttribute("data-brmk-mid") || mid;
+			const current = store.get(id);
+			if (!current) return;
+			openEditor({
+				mid: id,
+				record: current,
+				anchor: badge,
+				nickname: current.nickSnapshot,
+				scene: options.scene
+			});
+		});
+		badge.addEventListener("keydown", (ev) => {
+			if (ev.key === "Enter" || ev.key === " ") {
+				ev.preventDefault();
+				badge.click();
+			}
+		});
+		return badge;
+	}
 	function renderBadge(anchor, record, options) {
 		if (!record.remark && !record.tags.length) {
 			removeBadge(record.mid);
 			return null;
 		}
 		if (!anchor.isConnected) return null;
-		const rootNode = anchor.getRootNode();
-		if (rootNode instanceof ShadowRoot) ensureShadowStyle(rootNode);
-		let badge = findNextBadge(anchor);
+		let badge = get(anchor, "badge");
 		if (!badge) {
-			badge = h("span", "brmk-badge");
-			badge.setAttribute("data-brmk-mid", record.mid);
-			badge.setAttribute("role", "button");
-			badge.tabIndex = 0;
-			badge.addEventListener("click", (ev) => {
-				ev.preventDefault();
-				ev.stopPropagation();
-				openEditor({
-					mid: record.mid,
-					record: store.get(record.mid) ?? record,
-					anchor: badge,
-					nickname: record.nickSnapshot,
-					scene: options.scene
-				});
-			});
-			badge.addEventListener("keydown", (ev) => {
-				if (ev.key === "Enter" || ev.key === " ") {
-					ev.preventDefault();
-					badge?.click();
-				}
-			});
-			anchor.insertAdjacentElement("afterend", badge);
+			badge = createBadge(record.mid, options);
+			attach(anchor, "badge", badge);
 		}
 		badge.setAttribute("data-brmk-mid", record.mid);
 		badge.style.setProperty("--brmk-c", record.color ?? getTheme().color);
@@ -1850,86 +2156,86 @@
 			buildBadgeContent(badge, record, options);
 			badge.dataset.brmkSig = signature;
 		}
-		let sibling = anchor.nextElementSibling;
-		let guard = 0;
-		while (sibling && guard++ < 4) {
-			const next = sibling.nextElementSibling;
-			if (sibling.classList.contains("brmk-pencil")) sibling.remove();
-			sibling = next;
-		}
+		detach(anchor, "pencil");
+		refresh();
 		return badge;
 	}
 	function removeBadge(mid) {
-		for (const el of Array.from(document.querySelectorAll(badgeSelector(mid)))) el.remove();
+		for (const el of list("badge")) if (el.getAttribute("data-brmk-mid") === mid) removeEl(el);
+	}
+	function showPencil(anchor) {
+		const timer = hideTimers.get(anchor);
+		if (timer !== void 0) {
+			window.clearTimeout(timer);
+			hideTimers.delete(anchor);
+		}
+		get(anchor, "pencil")?.classList.add("brmk-pencil-on");
+	}
+	function hidePencilSoon(anchor) {
+		const timer = hideTimers.get(anchor);
+		if (timer !== void 0) window.clearTimeout(timer);
+		hideTimers.set(anchor, window.setTimeout(() => {
+			hideTimers.delete(anchor);
+			get(anchor, "pencil")?.classList.remove("brmk-pencil-on");
+		}, HIDE_DELAY));
 	}
 	function ensurePencil(anchor, mid, nickname, scene) {
 		if (!anchor.isConnected) return;
-		if (findNextBadge(anchor)) return;
-		const HIDE_DELAY = 220;
-		const timers = new WeakMap();
-		const pencilOf = () => {
-			const next = anchor.nextElementSibling;
-			return next && next.classList.contains("brmk-pencil") ? next : null;
-		};
-		const cancelHide = () => {
-			const timer = timers.get(anchor);
-			if (timer !== void 0) {
-				window.clearTimeout(timer);
-				timers.delete(anchor);
-			}
-		};
-		const show = () => {
-			cancelHide();
-			pencilOf()?.classList.add("brmk-pencil-on");
-		};
-		const scheduleHide = () => {
-			cancelHide();
-			const timer = window.setTimeout(() => {
-				timers.delete(anchor);
-				pencilOf()?.classList.remove("brmk-pencil-on");
-			}, HIDE_DELAY);
-			timers.set(anchor, timer);
-		};
-		let pencil = pencilOf();
+		if (get(anchor, "badge")) return;
+		let pencil = get(anchor, "pencil");
 		if (!pencil) {
 			const btn = h("button", "brmk-pencil");
 			btn.type = "button";
 			btn.title = "给 TA 加备注";
 			btn.setAttribute("aria-label", "给 TA 加备注");
 			btn.appendChild(icon("pencil", 9));
-			btn.addEventListener("mouseenter", show);
-			btn.addEventListener("mouseleave", scheduleHide);
-			btn.addEventListener("click", (ev) => {
-				ev.preventDefault();
-				ev.stopPropagation();
-				openEditor({
-					mid,
-					anchor: btn,
-					nickname,
-					scene
-				});
-			});
-			anchor.insertAdjacentElement("afterend", btn);
+			attach(anchor, "pencil", btn);
 			pencil = btn;
 		}
-		if (!pencilBound.has(anchor)) {
-			pencilBound.add(anchor);
-			anchor.addEventListener("mouseenter", show);
-			anchor.addEventListener("mouseleave", scheduleHide);
-			anchor.addEventListener("focus", show);
-			anchor.addEventListener("blur", scheduleHide);
-			anchor.parentElement?.addEventListener("mouseleave", scheduleHide);
+		pencilMeta.set(pencil, {
+			mid,
+			nickname,
+			scene
+		});
+		if (!pencilBound.has(pencil)) {
+			pencilBound.add(pencil);
+			pencil.addEventListener("mouseenter", () => showPencil(anchor));
+			pencil.addEventListener("mouseleave", () => hidePencilSoon(anchor));
+			pencil.addEventListener("click", (ev) => {
+				ev.preventDefault();
+				ev.stopPropagation();
+				const meta = pencilMeta.get(pencil);
+				if (!meta) return;
+				openEditor({
+					mid: meta.mid,
+					anchor: pencil,
+					nickname: meta.nickname,
+					scene: meta.scene
+				});
+			});
 		}
+		if (!anchorBound.has(anchor)) {
+			anchorBound.add(anchor);
+			anchor.addEventListener("mouseenter", () => showPencil(anchor));
+			anchor.addEventListener("mouseleave", () => hidePencilSoon(anchor));
+			anchor.addEventListener("focus", () => showPencil(anchor));
+			anchor.addEventListener("blur", () => hidePencilSoon(anchor));
+			anchor.parentElement?.addEventListener("mouseleave", () => hidePencilSoon(anchor));
+		}
+		refresh();
 	}
 	function pruneBadges() {
-		for (const el of Array.from(document.querySelectorAll(".brmk-badge[data-brmk-mid]"))) {
+		for (const el of list("badge")) {
 			const mid = el.getAttribute("data-brmk-mid") ?? "";
 			const rec = store.get(mid);
-			if (!rec || !rec.remark && !rec.tags.length) el.remove();
+			if (!rec || !rec.remark && !rec.tags.length) removeEl(el);
 		}
 	}
 	function badgeCount() {
-		return document.querySelectorAll(".brmk-badge[data-brmk-mid]").length;
+		return count("badge");
+	}
+	function clearAll() {
+		clear();
 	}
 	function badgeOptions() {
 		const s = getSettings().display;
@@ -2041,7 +2347,7 @@
 		return diag;
 	}
 	function clearVideoUpPencils() {
-		for (const el of Array.from(document.querySelectorAll(".brmk-pencil"))) el.remove();
+		clearSlot("pencil");
 	}
 	var HOST_CANDIDATES = [".aside"];
 	var CARD_ID = "brmk-space-card";
@@ -3544,7 +3850,7 @@
 	var themeCleanup = null;
 	var lastUrl = location.href;
 	var started = false;
-	var OWN_SELECTOR = "#brmk-manager, #brmk-editor, #brmk-toast, #brmk-doctor, #brmk-fab, #brmk-space-card, .brmk-badge, .brmk-pencil, #brmk-style";
+	var OWN_SELECTOR = "#brmk-manager, #brmk-editor, #brmk-toast, #brmk-doctor, #brmk-fab, #brmk-space-card, #brmk-layer, .brmk-badge, .brmk-pencil, #brmk-style";
 	function isOwnNode(node) {
 		if (!node) return false;
 		const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
@@ -3572,7 +3878,7 @@
 		}, wait);
 	}
 	function clearInjected() {
-		for (const el of Array.from(document.querySelectorAll(".brmk-badge, .brmk-pencil"))) el.remove();
+		clearAll();
 	}
 	function scanNow() {
 		guard("scan", () => {
