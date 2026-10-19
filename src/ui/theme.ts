@@ -61,7 +61,7 @@ function buildCss(theme: ThemeInfo): string {
 /* ===== BiliRemark 样式（全部 brmk- 前缀，不覆盖页面既有样式） ===== */
 .brmk-badge{
   display:inline-flex; align-items:center; gap:4px;
-  margin-left:6px; padding:0 7px; height:18px; max-width:260px;
+  margin-left:6px; padding:0 7px; height:18px; max-width:min(240px, 100%);
   border-radius:9px; vertical-align:middle;
   font-family:${FONT_STACK}; font-size:12px; font-weight:500; line-height:16px;
   letter-spacing:0; white-space:nowrap; cursor:pointer; user-select:none;
@@ -82,7 +82,7 @@ function buildCss(theme: ThemeInfo): string {
   background:var(--brmk-c, ${p.accent});
 }
 .brmk-badge .brmk-name{
-  overflow:hidden; text-overflow:ellipsis; max-width:160px;
+  overflow:hidden; text-overflow:ellipsis; max-width:140px;
 }
 .brmk-badge .brmk-tags{ display:inline-flex; gap:3px; overflow:hidden; }
 .brmk-badge .brmk-tag{

@@ -182,12 +182,14 @@ class RemarkStore {
   upsert(input: RawRecordInput, meta: UpsertMeta = {}): UserRecord | null {
     const existing = input.mid !== undefined ? this.data.users[String(input.mid)] : undefined
     const ts = now()
+    // color 允许显式传 null（= 恢复跟随主题），因此不能用 ?? 兜底
+    const colorValue = 'color' in input ? input.color : existing?.color
     const merged = normalizeRecord(
       {
         mid: input.mid,
         remark: input.remark ?? existing?.remark,
         tags: input.tags ?? existing?.tags,
-        color: input.color ?? existing?.color,
+        color: colorValue,
         note: input.note ?? existing?.note,
         nickSnapshot: meta.nickSnapshot ?? input.nickSnapshot ?? existing?.nickSnapshot,
         faceSnapshot: meta.faceSnapshot ?? input.faceSnapshot ?? existing?.faceSnapshot,

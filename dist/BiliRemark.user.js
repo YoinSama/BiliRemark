@@ -625,11 +625,12 @@
 		upsert(input, meta = {}) {
 			const existing = input.mid !== void 0 ? this.data.users[String(input.mid)] : void 0;
 			const ts = now();
+			const colorValue = "color" in input ? input.color : existing?.color;
 			const merged = normalizeRecord({
 				mid: input.mid,
 				remark: input.remark ?? existing?.remark,
 				tags: input.tags ?? existing?.tags,
-				color: input.color ?? existing?.color,
+				color: colorValue,
 				note: input.note ?? existing?.note,
 				nickSnapshot: meta.nickSnapshot ?? input.nickSnapshot ?? existing?.nickSnapshot,
 				faceSnapshot: meta.faceSnapshot ?? input.faceSnapshot ?? existing?.faceSnapshot,
@@ -1333,7 +1334,7 @@
 /* ===== BiliRemark 样式（全部 brmk- 前缀，不覆盖页面既有样式） ===== */
 .brmk-badge{
   display:inline-flex; align-items:center; gap:4px;
-  margin-left:6px; padding:0 7px; height:18px; max-width:260px;
+  margin-left:6px; padding:0 7px; height:18px; max-width:min(240px, 100%);
   border-radius:9px; vertical-align:middle;
   font-family:${FONT_STACK}; font-size:12px; font-weight:500; line-height:16px;
   letter-spacing:0; white-space:nowrap; cursor:pointer; user-select:none;
@@ -1354,7 +1355,7 @@
   background:var(--brmk-c, ${p.accent});
 }
 .brmk-badge .brmk-name{
-  overflow:hidden; text-overflow:ellipsis; max-width:160px;
+  overflow:hidden; text-overflow:ellipsis; max-width:140px;
 }
 .brmk-badge .brmk-tags{ display:inline-flex; gap:3px; overflow:hidden; }
 .brmk-badge .brmk-tag{
@@ -1765,7 +1766,22 @@
 		badge.setAttribute("data-brmk-mid", record.mid);
 		badge.style.setProperty("--brmk-c", record.color ?? getTheme().color);
 		badge.classList.toggle("brmk-hover-only", !!options.showOnHoverOnly);
-		buildBadgeContent(badge, record, options);
+		const signature = [
+			record.remark,
+			record.tags.join(""),
+			record.color ?? "",
+			record.note,
+			record.nickSnapshot,
+			options.showTags ? 1 : 0,
+			options.showColorDot ? 1 : 0,
+			options.maxTags,
+			options.showOnHoverOnly ? 1 : 0,
+			getTheme().color
+		].join("");
+		if (badge.dataset.brmkSig !== signature) {
+			buildBadgeContent(badge, record, options);
+			badge.dataset.brmkSig = signature;
+		}
 		let sibling = anchor.nextElementSibling;
 		let guard = 0;
 		while (sibling && guard++ < 4) {

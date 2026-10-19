@@ -40,10 +40,10 @@ B 站网页端「用户备注」油猴脚本：给 UP 主、评论者打上**只
 
 ```bash
 npm run build          # tsc --noEmit + vite build
-node tests/run.mjs     # 真实 Chromium + B 站视频页夹具，17 项断言
+node tests/run.mjs     # 真实 Chromium + B 站视频页夹具，18 项断言
 ```
 
-`tests/run.mjs` 覆盖：hover 铅笔 → 编辑保存 → 徽标即时刷新 → 刷新后仍在 → 管理页列表/搜索/设置切换 → JSON 导入（预览 + 合并）→ JSON 导出下载 → 删除与撤销 → 手动按 mid 新增 → 深色主题 → 体检面板 → 零外部请求。
+`tests/run.mjs` 覆盖：hover 铅笔 → 编辑保存 → 徽标即时刷新 → 刷新后仍在 → 管理页列表/搜索/设置切换 → JSON 导入（预览 + 合并）→ JSON 导出下载 → 自定义颜色清除 → 删除与撤销 → 手动按 mid 新增 → 深色主题 → 体检面板 → 零外部请求。
 
 真实页面另有三支探针：`tests/probe-real*.mjs`，实测结论写进 `tests/selectors.md`。
 

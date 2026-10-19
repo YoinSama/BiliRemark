@@ -95,7 +95,24 @@ export function renderBadge(anchor: Element, record: UserRecord, options: BadgeO
   badge.setAttribute('data-brmk-mid', record.mid)
   badge.style.setProperty('--brmk-c', record.color ?? getTheme().color)
   badge.classList.toggle('brmk-hover-only', !!options.showOnHoverOnly)
-  buildBadgeContent(badge, record, options)
+
+  // 内容没变就不重建 DOM，避免每轮巡检都产生无意义的节点抖动
+  const signature = [
+    record.remark,
+    record.tags.join('\u0001'),
+    record.color ?? '',
+    record.note,
+    record.nickSnapshot,
+    options.showTags ? 1 : 0,
+    options.showColorDot ? 1 : 0,
+    options.maxTags,
+    options.showOnHoverOnly ? 1 : 0,
+    getTheme().color,
+  ].join('\u0002')
+  if (badge.dataset.brmkSig !== signature) {
+    buildBadgeContent(badge, record, options)
+    badge.dataset.brmkSig = signature
+  }
 
   // 已经备注了就不需要铅笔入口
   let sibling: Element | null = anchor.nextElementSibling
