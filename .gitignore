@@ -2,4 +2,7 @@ node_modules/
 .vite/
 *.log
 tests/screenshots/debug*.png
+tests/screenshots/failure.png
+tests/screenshots/probe-*.png
+tests/.auth-state.json
 .commitmsg*.txt

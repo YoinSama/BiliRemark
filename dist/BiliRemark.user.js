@@ -404,6 +404,9 @@
 			return "";
 		}
 	}
+	function pageUrlMid() {
+		return midFromHref(location.href);
+	}
 	function snapshotNickname(anchor) {
 		return (anchor.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 100);
 	}
@@ -1433,6 +1436,71 @@
 .brmk-btn-danger:hover{ background:rgba(229,72,77,.12); color:#e5484d; border-color:#e5484d; }
 .brmk-btn:disabled{ opacity:.45; cursor:not-allowed; }
 
+/* ===== 空间页侧栏「备注」模块（宿主是深色侧栏，配色独立于页面深浅） ===== */
+#brmk-space-card{
+  box-sizing:border-box; margin:10px 0 0; padding:13px 14px;
+  border-radius:12px; border:1px solid rgba(255,255,255,.07);
+  background:rgba(255,255,255,.055); color:#e9e9e9;
+  font-family:${FONT_STACK}; font-size:13px; line-height:1.6;
+  --brmk-sp-c:${p.accent};
+}
+#brmk-space-card *{ box-sizing:border-box; font-family:inherit; }
+#brmk-space-card [hidden]{ display:none !important; }
+.brmk-sp-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.brmk-sp-title{ font-size:14px; font-weight:600; color:#f1f1f3; }
+.brmk-sp-link{
+  appearance:none; border:0; border-radius:4px; padding:2px 4px; cursor:pointer;
+  background:transparent; color:rgba(255,255,255,.55);
+  font-size:12px; font-family:inherit; line-height:18px;
+  transition:color .12s ease, background .12s ease;
+}
+.brmk-sp-link:hover{ color:${p.accent}; background:rgba(255,255,255,.06); }
+.brmk-sp-link:focus-visible{ outline:2px solid ${p.accent}; outline-offset:1px; }
+.brmk-sp-name{ display:flex; align-items:center; gap:7px; margin:2px 0 8px; }
+.brmk-sp-dot{ width:8px; height:8px; border-radius:50%; background:var(--brmk-sp-c); flex:0 0 auto; }
+.brmk-sp-nametext{ font-size:15px; font-weight:500; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.brmk-sp-tags{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:8px; }
+.brmk-sp-tag{
+  font-size:11px; line-height:18px; padding:0 7px; border-radius:9px; max-width:120px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:${p.accent};
+  background:color-mix(in srgb, ${p.accent} 13%, transparent);
+  border:1px solid color-mix(in srgb, ${p.accent} 35%, transparent);
+}
+.brmk-sp-note{ color:rgba(255,255,255,.78); white-space:pre-wrap; word-break:break-word; max-height:168px; overflow:auto; }
+.brmk-sp-foot{ display:flex; align-items:center; gap:8px; margin-top:9px; }
+.brmk-sp-meta{ color:rgba(255,255,255,.38); font-size:11px; }
+.brmk-sp-spacer{ flex:1; }
+.brmk-sp-adv{ font-size:11px; color:rgba(255,255,255,.38); }
+.brmk-sp-emptytext{ color:rgba(255,255,255,.45); margin-bottom:10px; }
+.brmk-sp-label{ display:block; font-size:11px; color:rgba(255,255,255,.45); margin:8px 0 4px; }
+.brmk-sp-input,.brmk-sp-textarea{
+  width:100%; font-size:13px; line-height:20px; padding:7px 9px; outline:none;
+  color:#f1f1f3; background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.14); border-radius:8px;
+  transition:border-color .12s ease, background .12s ease;
+}
+.brmk-sp-input::placeholder,.brmk-sp-textarea::placeholder{ color:rgba(255,255,255,.32); }
+.brmk-sp-input:focus,.brmk-sp-textarea:focus{ border-color:${p.accent}; background:rgba(255,255,255,.1); }
+.brmk-sp-textarea{ resize:vertical; min-height:64px; max-height:180px; }
+.brmk-sp-chips{ display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px; }
+.brmk-sp-chip{
+  display:inline-flex; align-items:center; gap:3px; height:20px; padding:0 6px; border-radius:10px;
+  font-size:11px; line-height:20px; color:${p.accent};
+  background:color-mix(in srgb, ${p.accent} 15%, transparent);
+  border:1px solid color-mix(in srgb, ${p.accent} 38%, transparent);
+}
+.brmk-sp-chipx{ border:0; background:transparent; color:inherit; cursor:pointer; font-size:12px; line-height:1; padding:0 0 0 1px; }
+.brmk-sp-counter{ text-align:right; font-size:11px; color:rgba(255,255,255,.38); margin-top:3px; }
+.brmk-sp-actions{ display:flex; justify-content:flex-end; gap:8px; margin-top:10px; }
+#brmk-space-card .brmk-btn{
+  border:1px solid rgba(255,255,255,.16); background:transparent; color:rgba(255,255,255,.75);
+  height:28px; padding:0 14px; border-radius:6px; font-size:12px;
+}
+#brmk-space-card .brmk-btn:hover{ color:#fff; border-color:rgba(255,255,255,.3); background:rgba(255,255,255,.06); }
+#brmk-space-card .brmk-btn-primary{ background:${p.accent}; border-color:${p.accent}; color:#fff; }
+#brmk-space-card .brmk-btn-primary:hover{ color:#fff; filter:brightness(1.06); background:${p.accent}; }
+
 /* ===== 管理页 ===== */
 #brmk-manager{
   position:fixed; inset:0; z-index:99999; display:flex; align-items:center; justify-content:center;
@@ -1975,6 +2043,346 @@
 	function clearVideoUpPencils() {
 		for (const el of Array.from(document.querySelectorAll(".brmk-pencil"))) el.remove();
 	}
+	var HOST_CANDIDATES = [".aside"];
+	var CARD_ID = "brmk-space-card";
+	var SCENE = "space";
+	var FIXTURE_ATTR = "data-brmk-space-fixture";
+	var SPACE_HOST_RE = /^space\.bilibili\.com$/i;
+	var SPACE_PATH_RE = /^\/(\d{1,20})(?:\/|$)/;
+	var card = null;
+	var cardMid = "";
+	var editing = false;
+	var lastSig = "";
+	var draftTags = [];
+	var refreshView = null;
+	function isSpacePage() {
+		if (!SPACE_HOST_RE.test(location.hostname) && !document.documentElement.hasAttribute(FIXTURE_ATTR)) return false;
+		return SPACE_PATH_RE.test(location.pathname);
+	}
+	function spaceMid() {
+		const m = SPACE_PATH_RE.exec(location.pathname);
+		if (m && m[1] !== "0") return m[1];
+		return pageUrlMid();
+	}
+	function titleNickname() {
+		const title = document.title || "";
+		const m = /^(.+?)的个人空间/.exec(title);
+		return m ? m[1].trim().slice(0, 100) : "";
+	}
+	function findHost() {
+		const hits = [];
+		for (const selector of HOST_CANDIDATES) {
+			const found = qsa(selector);
+			hits.push({
+				selector,
+				hits: found.length
+			});
+			if (found.length) return {
+				host: found[0],
+				hits
+			};
+		}
+		return {
+			host: null,
+			hits
+		};
+	}
+	function hasContent(record) {
+		if (!record) return false;
+		return !!record.remark || record.tags.length > 0 || !!record.note.trim();
+	}
+	function signatureOf(record) {
+		return [
+			record?.remark ?? "",
+			record?.tags.join("") ?? "",
+			record?.note ?? "",
+			String(record?.updatedAt ?? 0),
+			record?.color ?? ""
+		].join("");
+	}
+	function destroy() {
+		card?.remove();
+		card = null;
+		cardMid = "";
+		editing = false;
+		lastSig = "";
+		draftTags = [];
+		refreshView = null;
+	}
+	function mount(host, mid) {
+		const nickname = titleNickname();
+		if (nickname) rememberNick(mid, nickname);
+		const el = h("div", "brmk-space-card");
+		el.id = CARD_ID;
+		el.setAttribute("data-brmk-mid", mid);
+		el.setAttribute("data-brmk-scene", SCENE);
+		const head = h("div", "brmk-sp-head");
+		const title = h("span", "brmk-sp-title", "备注");
+		const editBtn = h("button", "brmk-sp-link", "编辑备注");
+		editBtn.type = "button";
+		editBtn.setAttribute("data-act", "edit");
+		head.append(title, editBtn);
+		const view = h("div", "brmk-sp-view");
+		const nameRow = h("div", "brmk-sp-name");
+		const dot = h("span", "brmk-sp-dot");
+		const nameText = h("span", "brmk-sp-nametext");
+		nameRow.append(dot, nameText);
+		const tagsRow = h("div", "brmk-sp-tags");
+		const noteEl = h("div", "brmk-sp-note");
+		const foot = h("div", "brmk-sp-foot");
+		const footMeta = h("span", "brmk-sp-meta");
+		const footSpacer = h("span", "brmk-sp-spacer");
+		const advBtn = h("button", "brmk-sp-link brmk-sp-adv", "高级编辑");
+		advBtn.type = "button";
+		advBtn.setAttribute("data-act", "advanced");
+		foot.append(footMeta, footSpacer, advBtn);
+		view.append(nameRow, tagsRow, noteEl, foot);
+		const empty = h("div", "brmk-sp-empty");
+		const emptyText = h("div", "brmk-sp-emptytext", "还没给这位用户写备注。");
+		const addBtn = h("button", "brmk-btn brmk-btn-primary", "添加备注");
+		addBtn.type = "button";
+		addBtn.setAttribute("data-act", "add");
+		empty.append(emptyText, addBtn);
+		const editor = h("div", "brmk-sp-editor");
+		const remarkLabel = h("label", "brmk-sp-label", `备注名（≤${LIMITS.remark} 字）`);
+		const remarkInput = h("input", "brmk-sp-input");
+		remarkInput.type = "text";
+		remarkInput.maxLength = LIMITS.remark;
+		remarkInput.placeholder = "例如：老番茄 / 某某的另一个号";
+		remarkInput.setAttribute("data-field", "remark");
+		const tagLabel = h("label", "brmk-sp-label", `标签（≤${LIMITS.tags} 个，回车添加）`);
+		const chips = h("div", "brmk-sp-chips");
+		const tagInput = h("input", "brmk-sp-input");
+		tagInput.type = "text";
+		tagInput.maxLength = LIMITS.tag;
+		tagInput.placeholder = "输入后按回车";
+		tagInput.setAttribute("data-field", "tag");
+		const noteLabel = h("label", "brmk-sp-label", `长文本备注（≤${LIMITS.note} 字，仅自己可见）`);
+		const noteInput = h("textarea", "brmk-sp-textarea");
+		noteInput.maxLength = LIMITS.note;
+		noteInput.placeholder = "为什么备注这个人、注意什么……";
+		noteInput.setAttribute("data-field", "note");
+		const counter = h("div", "brmk-sp-counter");
+		const countNum = h("span", "brmk-sp-count", "0");
+		counter.append(countNum, document.createTextNode(`/${LIMITS.note}`));
+		const actions = h("div", "brmk-sp-actions");
+		const cancelBtn = h("button", "brmk-btn", "取消");
+		cancelBtn.type = "button";
+		cancelBtn.setAttribute("data-act", "cancel");
+		const saveBtn = h("button", "brmk-btn brmk-btn-primary", "保存");
+		saveBtn.type = "button";
+		saveBtn.setAttribute("data-act", "save");
+		actions.append(cancelBtn, saveBtn);
+		editor.append(remarkLabel, remarkInput, tagLabel, chips, tagInput, noteLabel, noteInput, counter, actions);
+		el.append(head, view, empty, editor);
+		host.appendChild(el);
+		const currentRecord = () => store.get(mid);
+		const renderChips = () => {
+			chips.textContent = "";
+			draftTags.forEach((tag, index) => {
+				const chip = h("span", "brmk-sp-chip", tag);
+				const remove = h("button", "brmk-sp-chipx", "×");
+				remove.type = "button";
+				remove.title = "移除标签";
+				remove.setAttribute("data-act", "chip-remove");
+				remove.addEventListener("click", () => {
+					draftTags.splice(index, 1);
+					renderChips();
+				});
+				chip.appendChild(remove);
+				chips.appendChild(chip);
+			});
+			tagInput.disabled = draftTags.length >= LIMITS.tags;
+			tagInput.placeholder = draftTags.length >= LIMITS.tags ? "已达标签上限" : "输入后按回车";
+		};
+		const addTag = () => {
+			const raw = tagInput.value.trim().replace(/[,，;；]/g, "");
+			tagInput.value = "";
+			if (!raw) return;
+			if (draftTags.length >= LIMITS.tags) {
+				toast(`最多 ${LIMITS.tags} 个标签`);
+				return;
+			}
+			const tag = raw.slice(0, LIMITS.tag);
+			if (draftTags.includes(tag)) return;
+			draftTags.push(tag);
+			renderChips();
+		};
+		const syncCount = () => {
+			countNum.textContent = String(noteInput.value.length);
+		};
+		const renderView = () => {
+			const record = currentRecord();
+			const filled = hasContent(record);
+			view.hidden = !filled;
+			empty.hidden = filled;
+			editor.hidden = true;
+			editBtn.hidden = !filled;
+			editBtn.textContent = "编辑备注";
+			if (!filled) return;
+			nameText.textContent = record?.remark || record?.nickSnapshot || `mid ${mid}`;
+			if (record?.color) el.style.setProperty("--brmk-sp-c", record.color);
+			else el.style.removeProperty("--brmk-sp-c");
+			tagsRow.textContent = "";
+			for (const tag of record?.tags ?? []) tagsRow.appendChild(h("span", "brmk-sp-tag", tag));
+			tagsRow.hidden = !(record?.tags.length ?? 0);
+			noteEl.textContent = record?.note ?? "";
+			noteEl.hidden = !record?.note.trim();
+			footMeta.textContent = `mid ${mid} · 更新于 ${formatDay(record?.updatedAt ?? Date.now())}`;
+		};
+		const enterEdit = () => {
+			const record = currentRecord();
+			draftTags = record?.tags ? [...record.tags] : [];
+			remarkInput.value = record?.remark ?? "";
+			noteInput.value = record?.note ?? "";
+			tagInput.value = "";
+			renderChips();
+			syncCount();
+			editing = true;
+			view.hidden = true;
+			empty.hidden = true;
+			editor.hidden = false;
+			editBtn.hidden = true;
+			lastSig = "";
+			remarkInput.focus();
+		};
+		const exitEdit = () => {
+			editing = false;
+			editor.hidden = true;
+			lastSig = "";
+			renderView();
+		};
+		const doSave = () => {
+			const liveMid = spaceMid();
+			if (!liveMid || liveMid !== mid) {
+				toast("页面已切换用户，本次内容未保存");
+				exitEdit();
+				return;
+			}
+			const remark = remarkInput.value.trim();
+			const note = noteInput.value;
+			if (!remark && !draftTags.length && !note.trim()) {
+				toast("备注名、标签、正文至少填一项");
+				remarkInput.focus();
+				return;
+			}
+			if (!store.upsert({
+				mid,
+				remark,
+				tags: [...draftTags],
+				note,
+				nickSnapshot: currentRecord()?.nickSnapshot ?? titleNickname()
+			}, {
+				scene: SCENE,
+				url: location.href
+			})) {
+				toast("保存失败，请检查输入");
+				return;
+			}
+			toast("备注已保存");
+			exitEdit();
+		};
+		editBtn.addEventListener("click", enterEdit);
+		addBtn.addEventListener("click", enterEdit);
+		advBtn.addEventListener("click", () => {
+			openEditor({
+				mid,
+				record: currentRecord() ?? null,
+				anchor: el,
+				nickname: currentRecord()?.nickSnapshot ?? titleNickname(),
+				scene: SCENE
+			});
+		});
+		cancelBtn.addEventListener("click", exitEdit);
+		saveBtn.addEventListener("click", doSave);
+		tagInput.addEventListener("keydown", (ev) => {
+			if (ev.key === "Enter" || ev.key === "," || ev.key === "，") {
+				ev.preventDefault();
+				addTag();
+			} else if (ev.key === "Backspace" && !tagInput.value && draftTags.length) {
+				draftTags.pop();
+				renderChips();
+			}
+		});
+		tagInput.addEventListener("blur", () => {
+			if (tagInput.value.trim()) addTag();
+		});
+		noteInput.addEventListener("input", syncCount);
+		el.addEventListener("keydown", (ev) => {
+			if (ev.key === "Escape" && editing) {
+				ev.stopPropagation();
+				exitEdit();
+			} else if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey) && editing) {
+				ev.preventDefault();
+				doSave();
+			}
+		});
+		renderView();
+		lastSig = signatureOf(currentRecord());
+		refreshView = renderView;
+		log("空间侧栏备注模块已注入", mid);
+		return el;
+	}
+	function scanSpaceAside() {
+		const { host, hits } = findHost();
+		const mid = spaceMid();
+		const diag = {
+			scene: SCENE,
+			label: "个人空间侧栏",
+			selectors: hits,
+			midResolved: mid ? 1 : 0,
+			injected: 0,
+			notes: []
+		};
+		if (!isSpacePage()) {
+			destroy();
+			diag.notes.push("当前页不是空间页，已卸载模块");
+			setDiagnostic(diag);
+			return diag;
+		}
+		if (!mid) {
+			destroy();
+			diag.notes.push("URL 里没有解析到 mid，页面结构或路由可能已变");
+			setDiagnostic(diag);
+			return diag;
+		}
+		if (!host) {
+			destroy();
+			diag.notes.push("未找到 .aside 侧栏（可能未登录、页面未渲染完或已改版）");
+			setDiagnostic(diag);
+			return diag;
+		}
+		if (!(card && card.isConnected && card.parentElement === host) || cardMid !== mid) {
+			destroy();
+			try {
+				card = mount(host, mid);
+				cardMid = mid;
+				diag.injected = 1;
+			} catch (err) {
+				warn("注入空间侧栏备注模块失败", err);
+				diag.notes.push("注入异常，详见控制台");
+			}
+		} else {
+			diag.injected = 1;
+			if (!editing) {
+				const sig = signatureOf(store.get(mid));
+				if (sig !== lastSig) {
+					lastSig = sig;
+					refreshView?.();
+				}
+			}
+		}
+		if (!getSettings().scenes[SCENE]) {
+			destroy();
+			diag.injected = 0;
+			diag.notes.push("「个人空间」场景开关已关闭");
+		}
+		setDiagnostic(diag);
+		return diag;
+	}
+	function clearSpaceAside() {
+		destroy();
+	}
 	var SCENE_LABELS = {
 		videoUp: "视频 UP 主",
 		comment: "评论区",
@@ -2341,6 +2749,10 @@
 			renderAll();
 		})));
 		const scenes = section("场景开关");
+		const SCENE_HINTS = {
+			videoUp: "视频页 UP 主昵称旁显示备注",
+			space: "个人空间右侧侧栏显示独立备注卡片"
+		};
 		for (const def of [
 			{
 				key: "videoUp",
@@ -2352,7 +2764,7 @@
 			},
 			{
 				key: "space",
-				soon: true
+				soon: false
 			},
 			{
 				key: "dynamic",
@@ -2374,7 +2786,7 @@
 				key: "message",
 				soon: true
 			}
-		]) scenes.appendChild(fieldRow(SCENE_LABELS[def.key], def.soon ? "本里程碑未实现，开关暂不生效" : "视频页 UP 主昵称旁显示备注", switchEl(settings.scenes[def.key], (next) => {
+		]) scenes.appendChild(fieldRow(SCENE_LABELS[def.key], def.soon ? "本里程碑未实现，开关暂不生效" : SCENE_HINTS[def.key] ?? "", switchEl(settings.scenes[def.key], (next) => {
 			updateSettings((s) => {
 				s.scenes[def.key] = next;
 			});
@@ -3132,7 +3544,7 @@
 	var themeCleanup = null;
 	var lastUrl = location.href;
 	var started = false;
-	var OWN_SELECTOR = "#brmk-manager, #brmk-editor, #brmk-toast, #brmk-doctor, #brmk-fab, .brmk-badge, .brmk-pencil, #brmk-style";
+	var OWN_SELECTOR = "#brmk-manager, #brmk-editor, #brmk-toast, #brmk-doctor, #brmk-fab, #brmk-space-card, .brmk-badge, .brmk-pencil, #brmk-style";
 	function isOwnNode(node) {
 		if (!node) return false;
 		const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
@@ -3167,6 +3579,7 @@
 			const settings = getSettings();
 			if (!settings.enabled) {
 				clearInjected();
+				clearSpaceAside();
 				return;
 			}
 			pruneBadges();
@@ -3174,6 +3587,10 @@
 				if (settings.scenes.videoUp) scanVideoUp();
 				else clearVideoUpPencils();
 			} else clearVideoUpPencils();
+			if (isSpacePage()) {
+				if (settings.scenes.space) scanSpaceAside();
+				else clearSpaceAside();
+			} else clearSpaceAside();
 			log("扫描完成，徽标数", badgeCount());
 		}, void 0);
 	}
@@ -3204,6 +3621,7 @@
 	function onRouteChange() {
 		log("路由变化", location.href);
 		clearInjected();
+		if (!isSpacePage()) clearSpaceAside();
 		closeDoctor();
 		scheduleScan(300);
 	}

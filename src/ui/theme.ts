@@ -160,6 +160,71 @@ function buildCss(theme: ThemeInfo): string {
 .brmk-btn-danger:hover{ background:rgba(229,72,77,.12); color:#e5484d; border-color:#e5484d; }
 .brmk-btn:disabled{ opacity:.45; cursor:not-allowed; }
 
+/* ===== 空间页侧栏「备注」模块（宿主是深色侧栏，配色独立于页面深浅） ===== */
+#brmk-space-card{
+  box-sizing:border-box; margin:10px 0 0; padding:13px 14px;
+  border-radius:12px; border:1px solid rgba(255,255,255,.07);
+  background:rgba(255,255,255,.055); color:#e9e9e9;
+  font-family:${FONT_STACK}; font-size:13px; line-height:1.6;
+  --brmk-sp-c:${p.accent};
+}
+#brmk-space-card *{ box-sizing:border-box; font-family:inherit; }
+#brmk-space-card [hidden]{ display:none !important; }
+.brmk-sp-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.brmk-sp-title{ font-size:14px; font-weight:600; color:#f1f1f3; }
+.brmk-sp-link{
+  appearance:none; border:0; border-radius:4px; padding:2px 4px; cursor:pointer;
+  background:transparent; color:rgba(255,255,255,.55);
+  font-size:12px; font-family:inherit; line-height:18px;
+  transition:color .12s ease, background .12s ease;
+}
+.brmk-sp-link:hover{ color:${p.accent}; background:rgba(255,255,255,.06); }
+.brmk-sp-link:focus-visible{ outline:2px solid ${p.accent}; outline-offset:1px; }
+.brmk-sp-name{ display:flex; align-items:center; gap:7px; margin:2px 0 8px; }
+.brmk-sp-dot{ width:8px; height:8px; border-radius:50%; background:var(--brmk-sp-c); flex:0 0 auto; }
+.brmk-sp-nametext{ font-size:15px; font-weight:500; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.brmk-sp-tags{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:8px; }
+.brmk-sp-tag{
+  font-size:11px; line-height:18px; padding:0 7px; border-radius:9px; max-width:120px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:${p.accent};
+  background:color-mix(in srgb, ${p.accent} 13%, transparent);
+  border:1px solid color-mix(in srgb, ${p.accent} 35%, transparent);
+}
+.brmk-sp-note{ color:rgba(255,255,255,.78); white-space:pre-wrap; word-break:break-word; max-height:168px; overflow:auto; }
+.brmk-sp-foot{ display:flex; align-items:center; gap:8px; margin-top:9px; }
+.brmk-sp-meta{ color:rgba(255,255,255,.38); font-size:11px; }
+.brmk-sp-spacer{ flex:1; }
+.brmk-sp-adv{ font-size:11px; color:rgba(255,255,255,.38); }
+.brmk-sp-emptytext{ color:rgba(255,255,255,.45); margin-bottom:10px; }
+.brmk-sp-label{ display:block; font-size:11px; color:rgba(255,255,255,.45); margin:8px 0 4px; }
+.brmk-sp-input,.brmk-sp-textarea{
+  width:100%; font-size:13px; line-height:20px; padding:7px 9px; outline:none;
+  color:#f1f1f3; background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.14); border-radius:8px;
+  transition:border-color .12s ease, background .12s ease;
+}
+.brmk-sp-input::placeholder,.brmk-sp-textarea::placeholder{ color:rgba(255,255,255,.32); }
+.brmk-sp-input:focus,.brmk-sp-textarea:focus{ border-color:${p.accent}; background:rgba(255,255,255,.1); }
+.brmk-sp-textarea{ resize:vertical; min-height:64px; max-height:180px; }
+.brmk-sp-chips{ display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px; }
+.brmk-sp-chip{
+  display:inline-flex; align-items:center; gap:3px; height:20px; padding:0 6px; border-radius:10px;
+  font-size:11px; line-height:20px; color:${p.accent};
+  background:color-mix(in srgb, ${p.accent} 15%, transparent);
+  border:1px solid color-mix(in srgb, ${p.accent} 38%, transparent);
+}
+.brmk-sp-chipx{ border:0; background:transparent; color:inherit; cursor:pointer; font-size:12px; line-height:1; padding:0 0 0 1px; }
+.brmk-sp-counter{ text-align:right; font-size:11px; color:rgba(255,255,255,.38); margin-top:3px; }
+.brmk-sp-actions{ display:flex; justify-content:flex-end; gap:8px; margin-top:10px; }
+#brmk-space-card .brmk-btn{
+  border:1px solid rgba(255,255,255,.16); background:transparent; color:rgba(255,255,255,.75);
+  height:28px; padding:0 14px; border-radius:6px; font-size:12px;
+}
+#brmk-space-card .brmk-btn:hover{ color:#fff; border-color:rgba(255,255,255,.3); background:rgba(255,255,255,.06); }
+#brmk-space-card .brmk-btn-primary{ background:${p.accent}; border-color:${p.accent}; color:#fff; }
+#brmk-space-card .brmk-btn-primary:hover{ color:#fff; filter:brightness(1.06); background:${p.accent}; }
+
 /* ===== 管理页 ===== */
 #brmk-manager{
   position:fixed; inset:0; z-index:99999; display:flex; align-items:center; justify-content:center;

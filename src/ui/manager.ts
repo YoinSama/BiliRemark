@@ -508,10 +508,15 @@ function renderSettings(r: Refs): void {
   )
 
   const scenes = section('场景开关')
+  /** 场景说明：未实现的场景统一标「后续版本」 */
+  const SCENE_HINTS: Partial<Record<SceneKey, string>> = {
+    videoUp: '视频页 UP 主昵称旁显示备注',
+    space: '个人空间右侧侧栏显示独立备注卡片',
+  }
   const sceneDefs: { key: SceneKey; soon: boolean }[] = [
     { key: 'videoUp', soon: false },
     { key: 'comment', soon: true },
-    { key: 'space', soon: true },
+    { key: 'space', soon: false },
     { key: 'dynamic', soon: true },
     { key: 'card', soon: true },
     { key: 'live', soon: true },
@@ -522,7 +527,7 @@ function renderSettings(r: Refs): void {
     scenes.appendChild(
       fieldRow(
         SCENE_LABELS[def.key],
-        def.soon ? '本里程碑未实现，开关暂不生效' : '视频页 UP 主昵称旁显示备注',
+        def.soon ? '本里程碑未实现，开关暂不生效' : (SCENE_HINTS[def.key] ?? ''),
         switchEl(settings.scenes[def.key], (next) => {
           updateSettings((s) => {
             s.scenes[def.key] = next

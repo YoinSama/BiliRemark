@@ -1,4 +1,5 @@
 import { clearVideoUpPencils, isVideoPage, scanVideoUp } from './adapters/videoUp'
+import { clearSpaceAside, isSpacePage, scanSpaceAside } from './adapters/spaceAside'
 import { getSettings, reloadSettings, updateSettings } from './core/config'
 import { STORAGE } from './core/constants'
 import { emit, on } from './core/bus'
@@ -25,7 +26,8 @@ let lastUrl = location.href
 let started = false
 
 /** 我们自己插入的节点，其变动不触发重新扫描（否则会自激） */
-const OWN_SELECTOR = '#brmk-manager, #brmk-editor, #brmk-toast, #brmk-doctor, #brmk-fab, .brmk-badge, .brmk-pencil, #brmk-style'
+const OWN_SELECTOR =
+  '#brmk-manager, #brmk-editor, #brmk-toast, #brmk-doctor, #brmk-fab, #brmk-space-card, .brmk-badge, .brmk-pencil, #brmk-style'
 
 function isOwnNode(node: Node | null): boolean {
   if (!node) return false
@@ -65,6 +67,7 @@ function scanNow(): void {
     const settings = getSettings()
     if (!settings.enabled) {
       clearInjected()
+      clearSpaceAside()
       return
     }
     pruneBadges()
@@ -73,6 +76,12 @@ function scanNow(): void {
       else clearVideoUpPencils()
     } else {
       clearVideoUpPencils()
+    }
+    if (isSpacePage()) {
+      if (settings.scenes.space) scanSpaceAside()
+      else clearSpaceAside()
+    } else {
+      clearSpaceAside()
     }
     log('扫描完成，徽标数', badgeCount())
   }, undefined)
@@ -106,6 +115,8 @@ function stopObserver(): void {
 function onRouteChange(): void {
   log('路由变化', location.href)
   clearInjected()
+  // 离开空间页时立刻移除模块，避免残留上一个用户的备注；空间页内切 tab 交给扫描幂等处理
+  if (!isSpacePage()) clearSpaceAside()
   closeDoctor()
   scheduleScan(300)
 }
@@ -307,6 +318,7 @@ export function shutdown(): void {
   themeCleanup?.()
   closeManager()
   closeDoctor()
+  clearSpaceAside()
   clearInjected()
 }
 
