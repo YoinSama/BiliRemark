@@ -1,8 +1,14 @@
+# 依赖与构建缓存
 node_modules/
 .vite/
+
+# 日志
 *.log
-tests/screenshots/debug*.png
-tests/screenshots/failure.png
-tests/screenshots/probe-*.png
-tests/.auth-state.json
+
+# 本地文档与测试（只在本地保留，不进仓库）
+docs/
+tests/
+
+# 本地临时文件
+*.bak
 .commitmsg*.txt
