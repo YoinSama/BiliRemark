@@ -1,0 +1,18 @@
+{
+  "name": "bili-remark",
+  "private": true,
+  "version": "1.0.0",
+  "description": "B 站网页端本地用户备注油猴脚本",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "build:fast": "vite build",
+    "test": "node tests/run.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vite-plugin-monkey": "^8.1.1"
+  }
+}
