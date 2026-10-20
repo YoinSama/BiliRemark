@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         BiliRemark
 // @namespace    https://github.com/YoinSama/BiliRemark
-// @version      1.0.0
+// @version      1.0.1
 // @author       Yoin
 // @description  B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。
 // @license      MIT
+// @downloadURL  https://raw.githubusercontent.com/YoinSama/BiliRemark/main/dist/BiliRemark.user.js
+// @updateURL    https://raw.githubusercontent.com/YoinSama/BiliRemark/main/dist/BiliRemark.user.js
 // @match        https://www.bilibili.com/*
 // @match        https://space.bilibili.com/*
 // @match        https://t.bilibili.com/*

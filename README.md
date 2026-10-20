@@ -10,9 +10,24 @@ B 站网页端「用户备注」油猴脚本：给 UP 主打上**只有你自己
 
 ## 安装
 
-1. 安装浏览器扩展 [Tampermonkey](https://www.tampermonkey.net/)（Violentmonkey / ScriptCat 也可，但只保证 API 交集内不崩）。
-2. 打开 `dist/BiliRemark.user.js`，全选复制，粘贴进 Tampermonkey 新建脚本；或直接把文件拖进扩展页面。
+**[▶ 一键安装 BiliRemark](https://raw.githubusercontent.com/YoinSama/BiliRemark/main/dist/BiliRemark.user.js)**
+
+1. 先装浏览器扩展 [Tampermonkey](https://www.tampermonkey.net/)（Violentmonkey / ScriptCat 也可，但只保证 API 交集内不崩）。
+2. 点击上面的安装链接 → Tampermonkey 弹出安装页 → 点「安装」。
 3. 打开任意 B 站视频页：右下角出现「备注」浮动按钮即安装成功。
+
+装好后脚本会按 `@version` 自动检查更新，不用手动重装。
+
+<details>
+<summary>链接打不开？（国内网络）</summary>
+
+`raw.githubusercontent.com` 在国内常被墙。备用地址（jsDelivr 从 GitHub 拉取，内容与上面完全一致）：
+
+https://cdn.jsdelivr.net/gh/YoinSama/BiliRemark@main/dist/BiliRemark.user.js
+
+或直接在 GitHub 页面上下载 `dist/BiliRemark.user.js`，拖进 Tampermonkey 管理面板。
+
+</details>
 
 **从源码构建：**
 
