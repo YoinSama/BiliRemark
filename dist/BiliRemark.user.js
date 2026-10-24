@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliRemark
 // @namespace    https://github.com/YoinSama/BiliRemark
-// @version      1.0.1
+// @version      1.0.2
 // @author       Yoin
 // @description  B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。
 // @license      MIT
@@ -1513,14 +1513,32 @@
 			return "";
 		}
 	}
-	function luminanceOf(color) {
-		const rgb = parseColor(color);
-		if (!rgb) return null;
+	function relativeLuminance(rgb) {
 		const [r, g, b] = rgb.map((n) => {
 			const c = n / 255;
 			return c <= .03928 ? c / 12.92 : Math.pow((c + .055) / 1.055, 2.4);
 		});
 		return .2126 * r + .7152 * g + .0722 * b;
+	}
+	function luminanceOf(color) {
+		const rgb = parseColor(color);
+		return rgb ? relativeLuminance(rgb) : null;
+	}
+	function contrastOf(a, b) {
+		const la = relativeLuminance(a);
+		const lb = relativeLuminance(b);
+		return (Math.max(la, lb) + .05) / (Math.min(la, lb) + .05);
+	}
+	function readableOn(color, bg, min = 4.5) {
+		const fg = parseColor(color);
+		if (!fg) return color;
+		if (contrastOf(fg, bg) >= min) return color;
+		const target = relativeLuminance(bg) < .25 ? 255 : 0;
+		for (let t = .06; t <= .9; t += .06) {
+			const mix = fg.map((v) => v + (target - v) * t);
+			if (contrastOf(mix, bg) >= min) return toHex(mix);
+		}
+		return target === 255 ? "#e9e9e9" : "#18191c";
 	}
 	function detectDark() {
 		const fg = cssVar("--foreground-color");
@@ -1748,52 +1766,60 @@
 .brmk-btn-danger:hover{ background:rgba(229,72,77,.12); color:#e5484d; border-color:#e5484d; }
 .brmk-btn:disabled{ opacity:.45; cursor:not-allowed; }
 
-/* ===== 空间页侧栏「备注」模块（宿主是深色侧栏，配色独立于页面深浅） ===== */
+/* ===== 空间页侧栏「备注」模块（跟随原生侧栏深浅：默认浅色原生样式，深色侧栏由 data-brmk-sp-theme 覆盖） ===== */
+/* 浅色取自 2026-10 实测原生卡面：#F6F7F8 底 / 6px 圆角 / 无边框，标题 16px 500 #18191C，间距节奏 10px */
 #brmk-space-card{
-  box-sizing:border-box; margin:10px 0 0; padding:13px 14px;
-  border-radius:12px; border:1px solid rgba(255,255,255,.07);
-  background:rgba(255,255,255,.055); color:#e9e9e9;
+  box-sizing:border-box; margin:0 0 10px; padding:14px 16px;
+  border-radius:6px; border:0;
+  background:#f6f7f8; color:#18191c;
   font-family:${FONT_STACK}; font-size:13px; line-height:1.6;
   --brmk-sp-c:${p.accent};
 }
 #brmk-space-card *{ box-sizing:border-box; font-family:inherit; }
 #brmk-space-card [hidden]{ display:none !important; }
 .brmk-sp-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
-.brmk-sp-title{ font-size:14px; font-weight:600; color:#f1f1f3; }
+.brmk-sp-title{ font-size:16px; font-weight:500; color:#18191c; }
 .brmk-sp-link{
   appearance:none; border:0; border-radius:4px; padding:2px 4px; cursor:pointer;
-  background:transparent; color:rgba(255,255,255,.55);
+  background:transparent; color:#61666d;
   font-size:12px; font-family:inherit; line-height:18px;
   transition:color .12s ease, background .12s ease;
 }
-.brmk-sp-link:hover{ color:${p.accent}; background:rgba(255,255,255,.06); }
+.brmk-sp-link:hover{ color:${p.accent}; background:rgba(0,0,0,.05); }
 .brmk-sp-link:focus-visible{ outline:2px solid ${p.accent}; outline-offset:1px; }
 .brmk-sp-name{ display:flex; align-items:center; gap:7px; margin:2px 0 8px; }
 .brmk-sp-dot{ width:8px; height:8px; border-radius:50%; background:var(--brmk-sp-c); flex:0 0 auto; }
-.brmk-sp-nametext{ font-size:15px; font-weight:500; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.brmk-sp-nametext{ font-size:15px; font-weight:600; color:var(--brmk-sp-c); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .brmk-sp-tags{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:8px; }
 .brmk-sp-tag{
   font-size:11px; line-height:18px; padding:0 7px; border-radius:9px; max-width:120px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  color:${p.accent};
-  background:color-mix(in srgb, ${p.accent} 13%, transparent);
-  border:1px solid color-mix(in srgb, ${p.accent} 35%, transparent);
+  color:var(--brmk-sp-c, ${p.accent});
+  background:color-mix(in srgb, var(--brmk-sp-c, ${p.accent}) 13%, transparent);
+  border:1px solid color-mix(in srgb, var(--brmk-sp-c, ${p.accent}) 35%, transparent);
 }
-.brmk-sp-note{ color:rgba(255,255,255,.78); white-space:pre-wrap; word-break:break-word; max-height:168px; overflow:auto; }
-.brmk-sp-foot{ display:flex; align-items:center; gap:8px; margin-top:9px; }
-.brmk-sp-meta{ color:rgba(255,255,255,.38); font-size:11px; }
+.brmk-sp-note{ color:#61666d; white-space:pre-wrap; word-break:break-word; max-height:168px; overflow:auto; }
+.brmk-sp-foot{ display:flex; align-items:center; gap:8px; margin-top:9px; flex-wrap:wrap; }
+.brmk-sp-meta{ color:#9499a0; font-size:11px; }
+.brmk-sp-mid{
+  appearance:none; border:0; background:transparent; padding:0; cursor:pointer;
+  font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size:11px; line-height:1.6; color:#9499a0;
+  transition:color .12s ease;
+}
+.brmk-sp-mid:hover{ color:${p.accent}; text-decoration:underline; }
 .brmk-sp-spacer{ flex:1; }
-.brmk-sp-adv{ font-size:11px; color:rgba(255,255,255,.38); }
-.brmk-sp-emptytext{ color:rgba(255,255,255,.45); margin-bottom:10px; }
-.brmk-sp-label{ display:block; font-size:11px; color:rgba(255,255,255,.45); margin:8px 0 4px; }
+.brmk-sp-adv{ font-size:11px; color:#9499a0; white-space:nowrap; }
+.brmk-sp-emptytext{ color:#9499a0; margin-bottom:10px; }
+.brmk-sp-label{ display:block; font-size:11px; color:#9499a0; margin:8px 0 4px; }
 .brmk-sp-input,.brmk-sp-textarea{
   width:100%; font-size:13px; line-height:20px; padding:7px 9px; outline:none;
-  color:#f1f1f3; background:rgba(255,255,255,.08);
-  border:1px solid rgba(255,255,255,.14); border-radius:8px;
+  color:#18191c; background:#fff;
+  border:1px solid #e3e5e7; border-radius:6px;
   transition:border-color .12s ease, background .12s ease;
 }
-.brmk-sp-input::placeholder,.brmk-sp-textarea::placeholder{ color:rgba(255,255,255,.32); }
-.brmk-sp-input:focus,.brmk-sp-textarea:focus{ border-color:${p.accent}; background:rgba(255,255,255,.1); }
+.brmk-sp-input::placeholder,.brmk-sp-textarea::placeholder{ color:#9499a0; }
+.brmk-sp-input:focus,.brmk-sp-textarea:focus{ border-color:${p.accent}; box-shadow:0 0 0 2px ${p.accentWeak}; }
 .brmk-sp-textarea{ resize:vertical; min-height:64px; max-height:180px; }
 .brmk-sp-chips{ display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px; }
 .brmk-sp-chip{
@@ -1803,15 +1829,39 @@
   border:1px solid color-mix(in srgb, ${p.accent} 38%, transparent);
 }
 .brmk-sp-chipx{ border:0; background:transparent; color:inherit; cursor:pointer; font-size:12px; line-height:1; padding:0 0 0 1px; }
-.brmk-sp-counter{ text-align:right; font-size:11px; color:rgba(255,255,255,.38); margin-top:3px; }
+.brmk-sp-counter{ text-align:right; font-size:11px; color:#9499a0; margin-top:3px; }
 .brmk-sp-actions{ display:flex; justify-content:flex-end; gap:8px; margin-top:10px; }
 #brmk-space-card .brmk-btn{
-  border:1px solid rgba(255,255,255,.16); background:transparent; color:rgba(255,255,255,.75);
+  border:1px solid #e3e5e7; background:#fff; color:#61666d;
   height:28px; padding:0 14px; border-radius:6px; font-size:12px;
 }
-#brmk-space-card .brmk-btn:hover{ color:#fff; border-color:rgba(255,255,255,.3); background:rgba(255,255,255,.06); }
+#brmk-space-card .brmk-btn:hover{ color:${p.accent}; border-color:${p.accentBorder}; background:#fff; }
 #brmk-space-card .brmk-btn-primary{ background:${p.accent}; border-color:${p.accent}; color:#fff; }
 #brmk-space-card .brmk-btn-primary:hover{ color:#fff; filter:brightness(1.06); background:${p.accent}; }
+
+/* 深色侧栏（B 站灰度或旧版布局）时的覆盖：沿用原深色配色 */
+#brmk-space-card[data-brmk-sp-theme="dark"]{ background:rgba(255,255,255,.055); color:#e9e9e9; }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-title{ color:#f1f1f3; }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-link{ color:rgba(255,255,255,.55); }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-link:hover{ color:${p.accent}; background:rgba(255,255,255,.06); }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-mid:hover{ color:${p.accent}; }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-note{ color:rgba(255,255,255,.78); }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-meta,
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-mid,
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-adv,
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-counter,
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-emptytext,
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-label{ color:rgba(255,255,255,.45); }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-input,
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-textarea{
+  color:#f1f1f3; background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.14); border-radius:8px;
+}
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-input::placeholder,
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-textarea::placeholder{ color:rgba(255,255,255,.32); }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-input:focus,
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-sp-textarea:focus{ background:rgba(255,255,255,.1); box-shadow:none; }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-btn{ border-color:rgba(255,255,255,.16); background:transparent; color:rgba(255,255,255,.75); }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-btn:hover{ color:#fff; border-color:rgba(255,255,255,.3); background:rgba(255,255,255,.06); }
 
 /* ===== 管理页 ===== */
 #brmk-manager{
@@ -2354,6 +2404,20 @@
 	var HOST_CANDIDATES = [".aside"];
 	var CARD_ID = "brmk-space-card";
 	var SCENE = "space";
+	var ANN_ANCHORS = [".ann-section", "#ann-card"];
+	var SURFACES = {
+		light: [
+			246,
+			247,
+			248
+		],
+		dark: [
+			36,
+			37,
+			41
+		]
+	};
+	var cardTheme = "light";
 	var FIXTURE_ATTR = "data-brmk-space-fixture";
 	var SPACE_HOST_RE = /^space\.bilibili\.com$/i;
 	var SPACE_PATH_RE = /^\/(\d{1,20})(?:\/|$)/;
@@ -2395,6 +2459,35 @@
 			hits
 		};
 	}
+	function announcementAnchor(host) {
+		for (const selector of ANN_ANCHORS) {
+			let el = qs(selector, host);
+			while (el && el.parentElement !== host) el = el.parentElement;
+			if (el && el.parentElement === host && el.id !== CARD_ID) return el;
+		}
+		for (const child of Array.from(host.children)) {
+			if (child.id === CARD_ID) continue;
+			if ((qs("[class*=\"header\"],[class*=\"head\"]", child)?.textContent ?? "").trim().startsWith("公告")) return child;
+		}
+		return null;
+	}
+	function surfaceThemeOf(host) {
+		for (const selector of [
+			".ann-section",
+			".home-aside-section > div",
+			".info-section",
+			".elec-section"
+		]) {
+			const el = qs(selector, host);
+			if (!el) continue;
+			const bg = getComputedStyle(el).backgroundColor;
+			if (!bg || /,\s*0\)$/.test(bg)) continue;
+			const lum = luminanceOf(bg);
+			if (lum === null) continue;
+			return lum < .35 ? "dark" : "light";
+		}
+		return "light";
+	}
 	function hasContent(record) {
 		if (!record) return false;
 		return !!record.remark || record.tags.length > 0 || !!record.note.trim();
@@ -2424,6 +2517,8 @@
 		el.id = CARD_ID;
 		el.setAttribute("data-brmk-mid", mid);
 		el.setAttribute("data-brmk-scene", SCENE);
+		cardTheme = surfaceThemeOf(host);
+		el.setAttribute("data-brmk-sp-theme", cardTheme);
 		const head = h("div", "brmk-sp-head");
 		const title = h("span", "brmk-sp-title", "备注");
 		const editBtn = h("button", "brmk-sp-link", "编辑备注");
@@ -2438,12 +2533,17 @@
 		const tagsRow = h("div", "brmk-sp-tags");
 		const noteEl = h("div", "brmk-sp-note");
 		const foot = h("div", "brmk-sp-foot");
+		const midBtn = h("button", "brmk-sp-mid", mid);
+		midBtn.type = "button";
+		midBtn.title = "点击复制";
+		midBtn.setAttribute("data-act", "copy-mid");
+		const footSep = h("span", "brmk-sp-meta", "·");
 		const footMeta = h("span", "brmk-sp-meta");
 		const footSpacer = h("span", "brmk-sp-spacer");
 		const advBtn = h("button", "brmk-sp-link brmk-sp-adv", "高级编辑");
 		advBtn.type = "button";
 		advBtn.setAttribute("data-act", "advanced");
-		foot.append(footMeta, footSpacer, advBtn);
+		foot.append(midBtn, footSep, footMeta, footSpacer, advBtn);
 		view.append(nameRow, tagsRow, noteEl, foot);
 		const empty = h("div", "brmk-sp-empty");
 		const emptyText = h("div", "brmk-sp-emptytext", "还没给这位用户写备注。");
@@ -2483,7 +2583,9 @@
 		actions.append(cancelBtn, saveBtn);
 		editor.append(remarkLabel, remarkInput, tagLabel, chips, tagInput, noteLabel, noteInput, counter, actions);
 		el.append(head, view, empty, editor);
-		host.appendChild(el);
+		const anchor = announcementAnchor(host);
+		if (anchor) host.insertBefore(el, anchor);
+		else host.appendChild(el);
 		const currentRecord = () => store.get(mid);
 		const renderChips = () => {
 			chips.textContent = "";
@@ -2529,14 +2631,14 @@
 			editBtn.textContent = "编辑备注";
 			if (!filled) return;
 			nameText.textContent = record?.remark || record?.nickSnapshot || `mid ${mid}`;
-			if (record?.color) el.style.setProperty("--brmk-sp-c", record.color);
+			if (record?.color) el.style.setProperty("--brmk-sp-c", readableOn(record.color, SURFACES[cardTheme]));
 			else el.style.removeProperty("--brmk-sp-c");
 			tagsRow.textContent = "";
 			for (const tag of record?.tags ?? []) tagsRow.appendChild(h("span", "brmk-sp-tag", tag));
 			tagsRow.hidden = !(record?.tags.length ?? 0);
 			noteEl.textContent = record?.note ?? "";
 			noteEl.hidden = !record?.note.trim();
-			footMeta.textContent = `mid ${mid} · 更新于 ${formatDay(record?.updatedAt ?? Date.now())}`;
+			footMeta.textContent = `更新于 ${formatDay(record?.updatedAt ?? Date.now())}`;
 		};
 		const enterEdit = () => {
 			const record = currentRecord();
@@ -2592,6 +2694,11 @@
 		};
 		editBtn.addEventListener("click", enterEdit);
 		addBtn.addEventListener("click", enterEdit);
+		midBtn.addEventListener("click", () => {
+			if (typeof GM_setClipboard === "function") GM_setClipboard(mid, "text");
+			else navigator.clipboard?.writeText(mid);
+			toast("mid 已复制");
+		});
 		advBtn.addEventListener("click", () => {
 			openEditor({
 				mid,
@@ -2673,6 +2780,14 @@
 		} else {
 			diag.injected = 1;
 			if (!editing) {
+				const anchor = announcementAnchor(host);
+				if (card && anchor && anchor.previousElementSibling !== card) host.insertBefore(card, anchor);
+				const theme = surfaceThemeOf(host);
+				if (theme !== cardTheme) {
+					cardTheme = theme;
+					card?.setAttribute("data-brmk-sp-theme", theme);
+					lastSig = "";
+				}
 				const sig = signatureOf(store.get(mid));
 				if (sig !== lastSig) {
 					lastSig = sig;

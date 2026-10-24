@@ -52,14 +52,41 @@ function cssVar(name: string): string {
   }
 }
 
-function luminanceOf(color: string): number | null {
-  const rgb = parseColor(color)
-  if (!rgb) return null
+function relativeLuminance(rgb: [number, number, number]): number {
   const [r, g, b] = rgb.map((n) => {
     const c = n / 255
     return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
   })
   return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+/** WCAG 相对亮度（0-1），供深浅判定与对比度修正使用 */
+export function luminanceOf(color: string): number | null {
+  const rgb = parseColor(color)
+  return rgb ? relativeLuminance(rgb) : null
+}
+
+function contrastOf(a: [number, number, number], b: [number, number, number]): number {
+  const la = relativeLuminance(a)
+  const lb = relativeLuminance(b)
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+}
+
+/**
+ * 显示色修正：color 与背景的 WCAG 对比度不足 min 时，沿原色相向背景反方向
+ * 逐步混色（深底往白提亮、浅底往黑压暗），刚好达标即停；色相基本保留。
+ * 只影响展示，存储里仍保留用户原色。
+ */
+export function readableOn(color: string, bg: [number, number, number], min = 4.5): string {
+  const fg = parseColor(color)
+  if (!fg) return color
+  if (contrastOf(fg, bg) >= min) return color
+  const target = relativeLuminance(bg) < 0.25 ? 255 : 0
+  for (let t = 0.06; t <= 0.9; t += 0.06) {
+    const mix = fg.map((v) => v + (target - v) * t) as [number, number, number]
+    if (contrastOf(mix, bg) >= min) return toHex(mix)
+  }
+  return target === 255 ? '#e9e9e9' : '#18191c'
 }
 
 /** B 站 / Evolved 的深色判定：优先读变量，其次 class，最后看背景亮度 */

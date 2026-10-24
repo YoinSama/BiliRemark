@@ -5,8 +5,9 @@ import { rememberNick, setDiagnostic, type SceneDiagnostic } from '../core/runti
 import { store } from '../core/store'
 import type { SceneKey, UserRecord } from '../core/types'
 import { formatDay } from '../util/format'
-import { h, qsa } from '../util/dom'
+import { h, qs, qsa } from '../util/dom'
 import { log, warn } from '../util/log'
+import { luminanceOf, readableOn } from '../core/env'
 import { openEditor } from '../ui/editor'
 import { toast } from '../ui/toast'
 
@@ -15,6 +16,16 @@ const HOST_CANDIDATES = ['.aside']
 
 const CARD_ID = 'brmk-space-card'
 const SCENE: SceneKey = 'space'
+
+/** 公告卡锚点候选：备注模块固定插在公告卡上方；找不到锚点时回退追加到末尾。改版时只动这里 */
+const ANN_ANCHORS = ['.ann-section', '#ann-card']
+
+/** 原生卡面等效色：备注卡的对比度修正按它算。浅色为 2026-10 实测 .ann-section 卡面，深色为旧版侧栏 */
+const SURFACES: Record<'light' | 'dark', [number, number, number]> = {
+  light: [246, 247, 248],
+  dark: [36, 37, 41],
+}
+let cardTheme: 'light' | 'dark' = 'light'
 
 /** 本地夹具显式标记：生产页面不会出现该属性，避免在任意 127.0.0.1 页误注入 */
 const FIXTURE_ATTR = 'data-brmk-space-fixture'
@@ -60,6 +71,40 @@ function findHost(): { host: Element | null; hits: { selector: string; hits: num
   return { host: null, hits }
 }
 
+/**
+ * 定位公告卡对应的 .aside 直接子节点作为插入锚点。
+ * 锚点可能藏在 section 包装层里（实测 .aside > .home-aside-section > .ann-section），
+ * 所以向上折算到 .aside 的直接子节点再插，保持与兄弟卡片同级的间距和圆角。
+ */
+function announcementAnchor(host: Element): Element | null {
+  for (const selector of ANN_ANCHORS) {
+    let el: Element | null = qs(selector, host)
+    while (el && el.parentElement !== host) el = el.parentElement
+    if (el && el.parentElement === host && el.id !== CARD_ID) return el
+  }
+  // 兜底：按「公告」标题文本找，class 改版时仍能对位
+  for (const child of Array.from(host.children)) {
+    if (child.id === CARD_ID) continue
+    const head = qs('[class*="header"],[class*="head"]', child)
+    if ((head?.textContent ?? '').trim().startsWith('公告')) return child
+  }
+  return null
+}
+
+/** 读原生相邻卡片的实际底色判断侧栏深浅；全部取不到时按浅色处理 */
+function surfaceThemeOf(host: Element): 'light' | 'dark' {
+  for (const selector of ['.ann-section', '.home-aside-section > div', '.info-section', '.elec-section']) {
+    const el = qs(selector, host)
+    if (!el) continue
+    const bg = getComputedStyle(el).backgroundColor
+    if (!bg || /,\s*0\)$/.test(bg)) continue // 跳过透明底
+    const lum = luminanceOf(bg)
+    if (lum === null) continue
+    return lum < 0.35 ? 'dark' : 'light'
+  }
+  return 'light'
+}
+
 function hasContent(record: UserRecord | undefined): boolean {
   if (!record) return false
   return !!record.remark || record.tags.length > 0 || !!record.note.trim()
@@ -95,6 +140,8 @@ function mount(host: Element, mid: string): HTMLElement {
   el.id = CARD_ID
   el.setAttribute('data-brmk-mid', mid)
   el.setAttribute('data-brmk-scene', SCENE)
+  cardTheme = surfaceThemeOf(host)
+  el.setAttribute('data-brmk-sp-theme', cardTheme)
 
   // ---- 头部 ----
   const head = h('div', 'brmk-sp-head')
@@ -113,12 +160,17 @@ function mount(host: Element, mid: string): HTMLElement {
   const tagsRow = h('div', 'brmk-sp-tags')
   const noteEl = h('div', 'brmk-sp-note')
   const foot = h('div', 'brmk-sp-foot')
+  const midBtn = h('button', 'brmk-sp-mid', mid)
+  midBtn.type = 'button'
+  midBtn.title = '点击复制'
+  midBtn.setAttribute('data-act', 'copy-mid')
+  const footSep = h('span', 'brmk-sp-meta', '·')
   const footMeta = h('span', 'brmk-sp-meta')
   const footSpacer = h('span', 'brmk-sp-spacer')
   const advBtn = h('button', 'brmk-sp-link brmk-sp-adv', '高级编辑')
   advBtn.type = 'button'
   advBtn.setAttribute('data-act', 'advanced')
-  foot.append(footMeta, footSpacer, advBtn)
+  foot.append(midBtn, footSep, footMeta, footSpacer, advBtn)
   view.append(nameRow, tagsRow, noteEl, foot)
 
   // ---- 空态 ----
@@ -169,7 +221,9 @@ function mount(host: Element, mid: string): HTMLElement {
   editor.append(remarkLabel, remarkInput, tagLabel, chips, tagInput, noteLabel, noteInput, counter, actions)
 
   el.append(head, view, empty, editor)
-  host.appendChild(el)
+  const anchor = announcementAnchor(host)
+  if (anchor) host.insertBefore(el, anchor)
+  else host.appendChild(el)
 
   // ---------------- 交互 ----------------
 
@@ -224,14 +278,14 @@ function mount(host: Element, mid: string): HTMLElement {
     if (!filled) return
 
     nameText.textContent = record?.remark || record?.nickSnapshot || `mid ${mid}`
-    if (record?.color) el.style.setProperty('--brmk-sp-c', record.color)
+    if (record?.color) el.style.setProperty('--brmk-sp-c', readableOn(record.color, SURFACES[cardTheme]))
     else el.style.removeProperty('--brmk-sp-c')
     tagsRow.textContent = ''
     for (const tag of record?.tags ?? []) tagsRow.appendChild(h('span', 'brmk-sp-tag', tag))
     tagsRow.hidden = !(record?.tags.length ?? 0)
     noteEl.textContent = record?.note ?? ''
     noteEl.hidden = !record?.note.trim()
-    footMeta.textContent = `mid ${mid} · 更新于 ${formatDay(record?.updatedAt ?? Date.now())}`
+    footMeta.textContent = `更新于 ${formatDay(record?.updatedAt ?? Date.now())}`
   }
 
   const enterEdit = (): void => {
@@ -286,6 +340,11 @@ function mount(host: Element, mid: string): HTMLElement {
 
   editBtn.addEventListener('click', enterEdit)
   addBtn.addEventListener('click', enterEdit)
+  midBtn.addEventListener('click', () => {
+    if (typeof GM_setClipboard === 'function') GM_setClipboard(mid, 'text')
+    else void navigator.clipboard?.writeText(mid)
+    toast('mid 已复制')
+  })
   advBtn.addEventListener('click', () => {
     openEditor({
       mid,
@@ -376,6 +435,16 @@ export function scanSpaceAside(): SceneDiagnostic {
     diag.injected = 1
     // 编辑态不刷新，避免打断输入；查看态按内容签名判断是否需要重绘
     if (!editing) {
+      // 固定在公告卡上方：公告卡晚渲染或顺序被宿主改动时重新对位（查看态移动节点无感知）
+      const anchor = announcementAnchor(host)
+      if (card && anchor && anchor.previousElementSibling !== card) host.insertBefore(card, anchor)
+      // 跟随原生卡面深浅：B 站灰度/改版时自动切换主题，并按新底色重算备注色对比度
+      const theme = surfaceThemeOf(host)
+      if (theme !== cardTheme) {
+        cardTheme = theme
+        card?.setAttribute('data-brmk-sp-theme', theme)
+        lastSig = ''
+      }
       const sig = signatureOf(store.get(mid))
       if (sig !== lastSig) {
         lastSig = sig
