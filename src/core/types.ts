@@ -5,7 +5,6 @@ export type SceneKey =
   | 'space'
   | 'dynamic'
   | 'card'
-  | 'live'
   | 'relation'
   | 'message'
 

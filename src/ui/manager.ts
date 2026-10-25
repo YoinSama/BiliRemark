@@ -1,4 +1,4 @@
-import { LIMITS, TAG_PRESET_COLORS } from '../core/constants'
+import { LIMITS, TAG_PRESET_COLORS, VERSION } from '../core/constants'
 import { getSettings, resetSettings, updateSettings } from '../core/config'
 import { nickCache } from '../core/runtime'
 import { requestFaceBackfill } from '../core/faceFetch'
@@ -17,7 +17,6 @@ const SCENE_LABELS: Record<SceneKey | 'manual', string> = {
   space: '个人空间',
   dynamic: '动态',
   card: '视频卡片',
-  live: '直播',
   relation: '粉丝/关注',
   message: '私信',
   manual: '手动添加',
@@ -517,7 +516,7 @@ function renderSettings(r: Refs): void {
     videoUp: '视频页 UP 主昵称旁显示备注',
     comment: '评论者昵称旁显示备注（主楼 + 楼中楼回复）',
     space: '个人空间右侧侧栏显示独立备注卡片',
-    dynamic: '动态发布者昵称旁显示备注（opus 图文动态）',
+    dynamic: '动态发布者与转发原作者昵称旁显示备注（opus / dyn 详情 / 关注流 / 空间动态列表）',
     card: '卡片 UP 主昵称旁显示备注（首页 / 搜索 / 视频页右栏）',
     relation: '关系列表用户昵称旁显示备注（粉丝 / 关注两个子页）',
     message: '私信会话列表与聊天窗对方昵称旁显示备注',
@@ -528,7 +527,6 @@ function renderSettings(r: Refs): void {
     { key: 'space', soon: false },
     { key: 'dynamic', soon: false },
     { key: 'card', soon: false },
-    { key: 'live', soon: true },
     { key: 'relation', soon: false },
     { key: 'message', soon: false },
   ]
@@ -735,7 +733,7 @@ function renderSettings(r: Refs): void {
 
   const about = section('关于')
   const aboutText = h('div', 'brmk-row')
-  const aboutLabel = h('div', 'brmk-row-label', 'BiliRemark v1.0.0')
+  const aboutLabel = h('div', 'brmk-row-label', `BiliRemark v${VERSION}`)
   aboutLabel.appendChild(h('small', '', '备注只存在本机浏览器扩展存储里，不会上传，也不会同步到 B 站账号。'))
   aboutText.appendChild(aboutLabel)
   about.appendChild(aboutText)

@@ -6,7 +6,7 @@ import { clearImPencils, isImPage, scanIm } from './adapters/im'
 import { clearRelationPencils, isRelationPage, scanRelation } from './adapters/relation'
 import { clearSpaceAside, isSpacePage, scanSpaceAside } from './adapters/spaceAside'
 import { getSettings, reloadSettings, updateSettings } from './core/config'
-import { STORAGE } from './core/constants'
+import { STORAGE, VERSION } from './core/constants'
 import { emit, on } from './core/bus'
 import { refreshTheme, installStyles } from './ui/theme'
 import { watchTheme } from './core/env'
@@ -20,7 +20,6 @@ import { openDoctor, closeDoctor, setDoctorRescan, isDoctorOpen, doctorEnabled }
 import { badgeCount, clearAll, pruneBadges } from './ui/badge'
 import { toast } from './ui/toast'
 
-const VERSION = '1.6.2'
 const APP_NS = '__biliRemark__'
 
 let observer: MutationObserver | null = null

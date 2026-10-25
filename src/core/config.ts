@@ -47,15 +47,15 @@ function mergeSettings(base: Settings, raw: unknown): Settings {
   }
 
   // 一次性迁移（v1.6.1）：relation / message 在 ≤v1.5 时代的默认值是占位 false，且开关
-  // 当时置灰不可点——存量 false 只能来自旧默认值，不是用户选择；live 已随 S6 移除归零。
+  // 当时置灰不可点——存量 false 只能来自旧默认值，不是用户选择。
   // 无标记时翻回当前默认值；此后用户主动关闭由标记保护，永不覆盖。
+  // （live 已随 v1.6.3 从场景表整体移除，存量数据里的 scenes.live 在上面的键遍历中被忽略。）
   const MIGRATION_SCENE_DEFAULTS = 'sceneDefaults20261025'
   const storedMigrations: Record<string, unknown> =
     r.migrations && typeof r.migrations === 'object' ? r.migrations : {}
   if (!storedMigrations[MIGRATION_SCENE_DEFAULTS]) {
     base.scenes.relation = DEFAULT_SETTINGS.scenes.relation
     base.scenes.message = DEFAULT_SETTINGS.scenes.message
-    base.scenes.live = DEFAULT_SETTINGS.scenes.live
   }
   base.migrations = { ...storedMigrations, [MIGRATION_SCENE_DEFAULTS]: true } as Record<string, boolean>
 

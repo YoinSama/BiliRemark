@@ -92,6 +92,27 @@ export function pageState(): Record<string, any> | null {
   }
 }
 
+/**
+ * 页面世界的 document（隔离世界下经 unsafeWindow.document 返回）。
+ * 用途：读页面 JS 挂在元素上的 expando（如 dyn 应用的 el.__vue__）——两个世界对同一 DOM
+ * 节点各有独立包装对象，本世界 document 查到的元素上读不到页面世界写的 expando，
+ * 必须经这里枚举。返回的元素用于 DOM 操作 / 事件 / portal 贴靠均安全（同一底层节点）。
+ */
+export function pageDocument(): Document | null {
+  try {
+    if (typeof unsafeWindow !== 'undefined' && unsafeWindow?.document) {
+      return unsafeWindow.document as Document
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    return window.document
+  } catch {
+    return null
+  }
+}
+
 function pickMid(value: unknown): string | null {
   if (typeof value === 'number') {
     const s = String(value)

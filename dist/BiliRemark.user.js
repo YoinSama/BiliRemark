@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliRemark
 // @namespace    https://github.com/YoinSama/BiliRemark
-// @version      1.6.2
+// @version      1.7.0
 // @author       Yoin
 // @description  B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。
 // @license      MIT
@@ -10,7 +10,6 @@
 // @match        https://www.bilibili.com/*
 // @match        https://space.bilibili.com/*
 // @match        https://t.bilibili.com/*
-// @match        https://live.bilibili.com/*
 // @match        https://message.bilibili.com/*
 // @match        https://search.bilibili.com/*
 // @connect      api.bilibili.com
@@ -27,6 +26,7 @@
 
 (function() {
 	"use strict";
+	var VERSION = "1.7.0";
 	var STORAGE = {
 		data: "brmk.data.v1",
 		settings: "brmk.settings.v1",
@@ -50,7 +50,6 @@
 			space: true,
 			dynamic: true,
 			card: true,
-			live: false,
 			relation: true,
 			message: true
 		},
@@ -165,7 +164,6 @@
 		if (!storedMigrations[MIGRATION_SCENE_DEFAULTS]) {
 			base.scenes.relation = DEFAULT_SETTINGS.scenes.relation;
 			base.scenes.message = DEFAULT_SETTINGS.scenes.message;
-			base.scenes.live = DEFAULT_SETTINGS.scenes.live;
 		}
 		base.migrations = {
 			...storedMigrations,
@@ -382,6 +380,16 @@
 		try {
 			const s = w.__INITIAL_STATE__;
 			return s && typeof s === "object" ? s : null;
+		} catch {
+			return null;
+		}
+	}
+	function pageDocument() {
+		try {
+			if (typeof unsafeWindow !== "undefined" && unsafeWindow?.document) return unsafeWindow.document;
+		} catch {}
+		try {
+			return window.document;
 		} catch {
 			return null;
 		}
@@ -2892,8 +2900,17 @@
 		clearSidebarRows();
 	}
 	var AUTHOR_CANDIDATES = [".opus-module-author__name"];
+	var DYN_CARD = ".bili-dyn-item";
+	var DYN_AUTHOR_ANCHOR = ".bili-dyn-title__text";
+	var DYN_ORIG_AUTHOR_ANCHOR = ".dyn-orig-author__name";
+	var SPACE_DYN_PATH_RE = /^\/\d{1,20}\/dynamic\/?$/;
+	var FIXTURE_ATTR$3 = "data-brmk-dyn-fixture";
 	function isDynamicPage() {
-		return /\/opus\//i.test(location.pathname) || location.hostname === "t.bilibili.com";
+		if (document.documentElement.hasAttribute(FIXTURE_ATTR$3)) return true;
+		if (location.hostname === "t.bilibili.com") return true;
+		if (/\/opus\//i.test(location.pathname)) return true;
+		if (location.hostname === "space.bilibili.com" && SPACE_DYN_PATH_RE.test(location.pathname)) return true;
+		return false;
 	}
 	function midText(v) {
 		const s = String(v ?? "").trim();
@@ -2988,6 +3005,10 @@
 		return injected;
 	}
 	function scanDynamic() {
+		if (qs(AUTHOR_CANDIDATES[0])) return scanOpus();
+		return scanDyn();
+	}
+	function scanOpus() {
 		const { targets, hits } = pickTargets$3();
 		let injected = 0;
 		if (getSettings().scenes.dynamic && getSettings().enabled) injected = inject$3(targets);
@@ -3000,6 +3021,131 @@
 			notes: []
 		};
 		if (!targets.length) diag.notes.push("未找到动态作者锚点（可能尚未渲染完成、不是动态详情页或结构已变）");
+		setDiagnostic(diag);
+		return diag;
+	}
+	function dynAuthorOf(m) {
+		if (!m || typeof m !== "object") return null;
+		const a = m;
+		const mid = midFromHref(typeof a.jump_url === "string" ? a.jump_url : null) ?? midText(a.mid);
+		if (!mid) return null;
+		return {
+			mid,
+			name: typeof a.name === "string" ? a.name : "",
+			face: typeof a.face === "string" ? a.face : ""
+		};
+	}
+	function dynDataOf(card) {
+		try {
+			const data = card.__vue__?.data;
+			if (!data || typeof data !== "object") return null;
+			const d = data;
+			const author = dynAuthorOf(d.modules?.module_author);
+			if (!author) return null;
+			return {
+				author,
+				orig: dynAuthorOf(d.orig?.modules?.module_author)
+			};
+		} catch {
+			return null;
+		}
+	}
+	var dynLazyBound = new WeakSet();
+	function bindDynPencil(anchor, mid, nickname) {
+		if (dynLazyBound.has(anchor)) return;
+		dynLazyBound.add(anchor);
+		anchor.addEventListener("mouseenter", () => {
+			if (!anchor.isConnected) return;
+			ensurePencil(anchor, mid, nickname, "dynamic");
+			showPencil(anchor);
+		});
+	}
+	function pickDynTargets() {
+		const targets = [];
+		const doc = pageDocument();
+		if (!doc) return {
+			targets,
+			hits: []
+		};
+		const cards = Array.from(doc.querySelectorAll(DYN_CARD)).filter((el) => isVisible(el));
+		let authorAnchors = 0;
+		let origAnchors = 0;
+		for (const card of cards) {
+			const data = dynDataOf(card);
+			if (!data) continue;
+			const anchor = card.querySelector(DYN_AUTHOR_ANCHOR);
+			if (anchor && isVisible(anchor)) {
+				authorAnchors++;
+				targets.push({
+					anchor,
+					mid: data.author.mid,
+					nickname: data.author.name || snapshotNickname(anchor),
+					face: data.author.face
+				});
+			}
+			if (data.orig) {
+				const origAnchor = card.querySelector(DYN_ORIG_AUTHOR_ANCHOR);
+				if (origAnchor && isVisible(origAnchor)) {
+					origAnchors++;
+					targets.push({
+						anchor: origAnchor,
+						mid: data.orig.mid,
+						nickname: data.orig.name || snapshotNickname(origAnchor),
+						face: data.orig.face
+					});
+				}
+			}
+		}
+		return {
+			targets,
+			hits: [
+				{
+					selector: DYN_CARD,
+					hits: cards.length
+				},
+				{
+					selector: DYN_AUTHOR_ANCHOR,
+					hits: authorAnchors
+				},
+				{
+					selector: DYN_ORIG_AUTHOR_ANCHOR,
+					hits: origAnchors
+				}
+			]
+		};
+	}
+	function injectDyn(targets) {
+		const opts = {
+			...badgeOptions(),
+			scene: "dynamic"
+		};
+		let injected = 0;
+		for (const target of targets) {
+			if (!target.anchor.isConnected) continue;
+			rememberNick(target.mid, target.nickname);
+			if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face);
+			const record = store.get(target.mid);
+			if (record) {
+				if (renderBadge(target.anchor, record, opts)) injected++;
+			} else bindDynPencil(target.anchor, target.mid, target.nickname);
+		}
+		return injected;
+	}
+	function scanDyn() {
+		const { targets, hits } = pickDynTargets();
+		let injected = 0;
+		if (getSettings().scenes.dynamic && getSettings().enabled) injected = injectDyn(targets);
+		const diag = {
+			scene: "dynamic",
+			label: "动态页",
+			selectors: hits,
+			midResolved: targets.length,
+			injected,
+			notes: []
+		};
+		if (!hits.length) diag.notes.push("无法读取页面文档（unsafeWindow 不可用），dyn 分支未运行");
+		else if (!hits[0].hits) diag.notes.push("未找到 .bili-dyn-item（可能尚未渲染完成、不是 dyn 页面或结构已变）");
+		else if (!targets.length) diag.notes.push(`发现 ${hits[0].hits} 张 dyn 卡但 mid 数据 0 命中（__vue__ 数据面疑似失效，页面结构可能已改版）`);
 		setDiagnostic(diag);
 		return diag;
 	}
@@ -3943,7 +4089,6 @@
 		space: "个人空间",
 		dynamic: "动态",
 		card: "视频卡片",
-		live: "直播",
 		relation: "粉丝/关注",
 		message: "私信",
 		manual: "手动添加"
@@ -4308,7 +4453,7 @@
 			videoUp: "视频页 UP 主昵称旁显示备注",
 			comment: "评论者昵称旁显示备注（主楼 + 楼中楼回复）",
 			space: "个人空间右侧侧栏显示独立备注卡片",
-			dynamic: "动态发布者昵称旁显示备注（opus 图文动态）",
+			dynamic: "动态发布者与转发原作者昵称旁显示备注（opus / dyn 详情 / 关注流 / 空间动态列表）",
 			card: "卡片 UP 主昵称旁显示备注（首页 / 搜索 / 视频页右栏）",
 			relation: "关系列表用户昵称旁显示备注（粉丝 / 关注两个子页）",
 			message: "私信会话列表与聊天窗对方昵称旁显示备注"
@@ -4333,10 +4478,6 @@
 			{
 				key: "card",
 				soon: false
-			},
-			{
-				key: "live",
-				soon: true
 			},
 			{
 				key: "relation",
@@ -4472,7 +4613,7 @@
 		})));
 		const about = section("关于");
 		const aboutText = h("div", "brmk-row");
-		const aboutLabel = h("div", "brmk-row-label", "BiliRemark v1.0.0");
+		const aboutLabel = h("div", "brmk-row-label", `BiliRemark v${VERSION}`);
 		aboutLabel.appendChild(h("small", "", "备注只存在本机浏览器扩展存储里，不会上传，也不会同步到 B 站账号。"));
 		aboutText.appendChild(aboutLabel);
 		about.appendChild(aboutText);
@@ -5095,7 +5236,6 @@
 	function doctorEnabled() {
 		return getSettings().advanced.debug;
 	}
-	var VERSION = "1.6.2";
 	var APP_NS = "__biliRemark__";
 	var observer = null;
 	var scanTimer = null;
