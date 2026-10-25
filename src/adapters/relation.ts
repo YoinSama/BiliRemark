@@ -93,13 +93,15 @@ function bindLazyPencil(anchor: Element, mid: string, nickname: string): void {
   lazyBound.add(anchor)
   anchor.addEventListener('mouseenter', () => {
     if (!anchor.isConnected) return
-    ensurePencil(anchor, mid, nickname, 'relation')
+    ensurePencil(anchor, mid, nickname, 'relation', true)
     showPencil(anchor)
   })
 }
 
 function inject(targets: RelationTarget[]): number {
-  const opts = { ...badgeOptions(), scene: 'relation' as const }
+  // 摆位（2026-10-25 主人拍板）：贴昵称文字右侧同行（portal inline 选址，
+  // Range 量末行文字右缘 + 6px，宽度收敛信息列右缘、超长昵称内部省略，永不落下方）
+  const opts = { ...badgeOptions(), scene: 'relation' as const, placeInline: true }
   let injected = 0
   for (const target of targets) {
     if (!target.anchor.isConnected) continue

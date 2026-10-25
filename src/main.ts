@@ -20,7 +20,7 @@ import { openDoctor, closeDoctor, setDoctorRescan, isDoctorOpen, doctorEnabled }
 import { badgeCount, clearAll, pruneBadges } from './ui/badge'
 import { toast } from './ui/toast'
 
-const VERSION = '1.6.1'
+const VERSION = '1.6.2'
 const APP_NS = '__biliRemark__'
 
 let observer: MutationObserver | null = null
@@ -33,7 +33,7 @@ let started = false
 
 /** 我们自己插入的节点，其变动不触发重新扫描（否则会自激） */
 const OWN_SELECTOR =
-  '#brmk-manager, #brmk-editor, #brmk-toast, #brmk-doctor, #brmk-fab, #brmk-space-card, #brmk-layer, .brmk-badge, .brmk-pencil, #brmk-style'
+  '#brmk-manager, #brmk-editor, #brmk-toast, #brmk-doctor, #brmk-fab, #brmk-space-card, #brmk-layer, .brmk-badge, .brmk-pencil, .brmk-card-badge-row, #brmk-style'
 
 function isOwnNode(node: Node | null): boolean {
   if (!node) return false
@@ -48,9 +48,15 @@ function isOwnNode(node: Node | null): boolean {
 
 function mutationsAreOurs(records: MutationRecord[]): boolean {
   for (const record of records) {
+    // 我们往 B 站容器里追加/撤掉自有节点（侧栏备注行、空间卡等）：target 是别人的容器，
+    // 但增删节点全是自己的也算自身变动——否则每次插入都会多触发一轮扫描，
+    // 与「行被误删重建」叠加时会自激成 150ms 删建循环（侧栏备注行闪烁事故，2026-10-25）
+    const added = Array.from(record.addedNodes)
+    const removed = Array.from(record.removedNodes)
+    if ((added.length || removed.length) && added.every(isOwnNode) && removed.every(isOwnNode)) continue
     if (!isOwnNode(record.target)) return false
-    for (const node of Array.from(record.addedNodes)) if (!isOwnNode(node)) return false
-    for (const node of Array.from(record.removedNodes)) if (!isOwnNode(node)) return false
+    for (const node of added) if (!isOwnNode(node)) return false
+    for (const node of removed) if (!isOwnNode(node)) return false
   }
   return true
 }

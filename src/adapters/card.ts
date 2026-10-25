@@ -87,6 +87,8 @@ function ensureSidebarRow(anchor: Element, record: UserRecord, options: BadgeOpt
   const existing = info.querySelector<HTMLDivElement>(':scope > .brmk-card-badge-row')
   if (!existing) {
     const row = h('div', 'brmk-card-badge-row')
+    // 行自身必须带 mid：pruneSidebarRows 靠它对账，缺失会让每轮巡检把行删掉重建（闪烁，已修）
+    row.setAttribute('data-brmk-mid', record.mid)
     row.appendChild(buildBadgeElement(record, options))
     const next = upname.nextElementSibling
     try {

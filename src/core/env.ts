@@ -89,20 +89,76 @@ export function readableOn(color: string, bg: [number, number, number], min = 4.
   return target === 255 ? '#e9e9e9' : '#18191c'
 }
 
-/** B 站 / Evolved 的深色判定：优先读变量，其次 class，最后看背景亮度 */
-function detectDark(): boolean {
-  const fg = cssVar('--foreground-color')
-  if (fg === 'white' || fg === '#fff' || fg === '#ffffff') return true
-  if (fg === 'black' || fg === '#000' || fg === '#000000') return false
+/**
+ * 徽标文字色兜底（2026-10-25 原生深色 × Evolved 报障加固）：
+ * 徽标底 = accent 14% + 盘底 的混合色，文字 = accent 本身。深色盘下若来源色
+ * （Evolved 主题色 / 用户备注色）太深，字就沉进底里——「一团黑不显示字」。
+ * 与实际药丸底对比不足 3 时沿色相向白提亮（readableOn），只动深色盘：浅色盘的
+ * 「粉字粉底」是既定设计（对比 ~2.2 但用户已认可），不掺和。
+ * 注意固定点：提亮后的字色同时参与底混合（--brmk-c 驱动文字与底两者），
+ * 按原色算一次的修正量会不足，须迭代到「字 vs 字混合出的底」达标为止（实测 2~3 轮收敛）。
+ */
+export function readableBadgeColor(color: string, dark: boolean): string {
+  if (!dark) return color
+  let c = parseColor(color)
+  if (!c) return color
+  const base: [number, number, number] = [0x1f, 0x1f, 0x1f]
+  for (let i = 0; i < 6; i++) {
+    const pill = c.map((v, j) => Math.round(v * 0.14 + base[j] * 0.86)) as [number, number, number]
+    if (contrastOf(c, pill) >= 3) return toHex(c)
+    const next = parseColor(readableOn(toHex(c), pill, 3))
+    if (!next) break
+    c = next
+  }
+  return toHex(c)
+}
 
+/** 背景色亮度（含 alpha 感知）：近全透明返回 null（透明不等于黑，不能据此判深色） */
+function bgLuminance(color: string): number | null {
+  const m = color.match(/^rgba?\(([^)]+)\)$/)
+  if (!m) return null
+  const parts = m[1].split(/[,\s/]+/).filter(Boolean)
+  if (parts.length < 3) return null
+  const nums = parts.slice(0, 3).map((p) => (p.endsWith('%') ? (parseFloat(p) * 255) / 100 : parseFloat(p)))
+  if (nums.some((n) => !Number.isFinite(n))) return null
+  if (parts.length >= 4) {
+    const a = parseFloat(parts[3])
+    if (Number.isFinite(a) && a <= 0.05) return null
+  }
+  return relativeLuminance([nums[0], nums[1], nums[2]])
+}
+
+/**
+ * B 站 / Evolved 的深色判定。
+ * Evolved 夜间模式的真实信号是 body.dark class + meta[color-scheme]（上游 dark-mode 组件
+ * add/remove 的全部动作，registry/lib/components/style/dark-mode/index.ts）。
+ * 注意 --foreground-color 不能当深色信号：那是 Evolved 核心按主题色亮度推导的自身 UI 文字色
+ * （Color(themeColor).isLight() ? 'black' : 'white'），默认主题色下恒为 white、与夜间模式无关
+ * （2026-10-25 真机复现：夜间模式关闭后浅色页上仍 white，导致徽标烤进深色盘变黑）。
+ */
+function detectDark(): boolean {
   if (document.documentElement.classList.contains('dark')) return true
   if (document.body?.classList.contains('dark')) return true
+  // B 站原生深色（账号级设置，服务端下发）：信号是 html 上的 bili_dark class
+  // （2026-10-25 登录态实测：htmlClass="bili_dark"、--Ga1/--bg1 翻深、body 背景 rgb(10,11,12)）
+  if (document.documentElement.classList.contains('bili_dark')) return true
+  if (document.body?.classList.contains('bili_dark')) return true
   if (document.documentElement.getAttribute('data-theme') === 'dark') return true
 
+  const scheme = document
+    .querySelector('meta[name="color-scheme"]')
+    ?.getAttribute('content')
+    ?.trim()
+    .toLowerCase()
+  if (scheme === 'dark') return true
+  if (scheme === 'light') return false
+
   try {
-    const bg = getComputedStyle(document.body).backgroundColor
-    const lum = luminanceOf(bg)
-    if (lum !== null) return lum < 0.4
+    for (const el of [document.body, document.documentElement]) {
+      if (!el) continue
+      const lum = bgLuminance(getComputedStyle(el).backgroundColor)
+      if (lum !== null) return lum < 0.4
+    }
   } catch {
     /* ignore */
   }

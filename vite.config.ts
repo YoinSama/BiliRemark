@@ -17,7 +17,7 @@ export default defineConfig({
       userscript: {
         name: 'BiliRemark',
         namespace: 'https://github.com/YoinSama/BiliRemark',
-        version: '1.6.1',
+        version: '1.6.2',
         description: 'B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。',
         author: 'Yoin',
         license: 'MIT',

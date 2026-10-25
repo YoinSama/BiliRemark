@@ -16,6 +16,8 @@ const SLOTS: Slot[] = ['badge', 'pencil']
 const GAP = 6
 /** 还能显示点东西的最小宽度，比这窄就换位置 */
 const MIN_W = 60
+/** 行内挂法的底线宽度（圆点 + 约两字）：主人拍板行内永不落下方，满行极端时右对齐贴尾 */
+const INLINE_MIN_W = 34
 /** 离视口边缘的安全距离 */
 const MARGIN = 4
 /** 布局会随图片加载 / 异步渲染变化，没有 mutation 也得重新定位 */
@@ -168,9 +170,31 @@ function rowRightOf(anchor: Element): number {
 }
 
 /**
+ * 锚点内文字的行片段矩形（行内挂法专用）。
+ * 关系卡的昵称锚点是块级全宽元素（rect = 整列宽），元素右缘永远没有空间；
+ * 贴文字放必须量文字本体——Range 的 client rects 每行一段，
+ * 取最后一段 = 末行文字右缘（原生换行的超长昵称跟在末行后）。
+ */
+function lastTextRect(anchor: Element): { right: number; top: number; height: number } | null {
+  try {
+    const range = document.createRange()
+    range.selectNodeContents(anchor)
+    const rects = range.getClientRects()
+    if (!rects.length) return null
+    const last = rects[rects.length - 1]
+    return { right: last.right, top: last.top, height: last.height }
+  } catch {
+    return null
+  }
+}
+
+/**
  * 选址优先级：
- *   0. 锚点行下方（仅 data-brmk-place="below" 的徽标，如首页/搜索卡片：与锚点行
- *      左缘对齐、宽度受锚点父容器约束——卡片作者行是卡片信息区的整行，下方是留白）
+ *   0a. 锚点行下方（仅 data-brmk-place="below" 的徽标，如首页/搜索卡片：与锚点行
+ *       左缘对齐、宽度受锚点父容器约束——卡片作者行是卡片信息区的整行，下方是留白）
+ *   0b. 锚点文字右侧（仅 data-brmk-place="inline"：Range 量末行文字右缘 + GAP，
+ *       徽标与文字行中线对齐、宽度收敛在父容器右缘——关系卡昵称行专用，
+ *       空间不足按 tight→maxWidth 收缩，永不换行到下方）
  *   1. 锚点右侧（不压住同行任何兄弟）
  *   2. 整行末尾（不压住「发消息」之类同行按钮）
  *   3. 父容器下方
@@ -212,8 +236,12 @@ function place(anchor: Element, el: HTMLElement, vw: number, vh: number, lrx: nu
   let y: number
   let maxW: number
   let fits = true
+  /** 收缩底线：行内挂法更小（永不落下方，压到 34px 也保持可读的圆点+两字） */
+  const floorW = el.getAttribute('data-brmk-place') === 'inline' ? INLINE_MIN_W : MIN_W
 
-  const wantBelow = el.getAttribute('data-brmk-place') === 'below' && !!pr
+  const mode = el.getAttribute('data-brmk-place')
+  const wantBelow = mode === 'below' && !!pr
+  const wantInline = mode === 'inline' && !!pr
   if (wantBelow) {
     x = Math.max(MARGIN, Math.round(r.left))
     y = Math.round(r.bottom + 2)
@@ -222,6 +250,17 @@ function place(anchor: Element, el: HTMLElement, vw: number, vh: number, lrx: nu
     if (maxW < need) {
       fits = false
       maxW = Math.max(need, vw - MARGIN * 2 - x)
+    }
+  } else if (wantInline) {
+    // 文字右缘（块级锚点的 rect 是整列宽，不能直接用）；量不到时退元素右缘
+    const text = lastTextRect(anchor) ?? { right: r.right, top: r.top, height: r.height }
+    x = Math.round(text.right + GAP)
+    y = Math.round(text.top + (text.height - h) / 2)
+    maxW = Math.round(pr!.right - 2) - x
+    if (maxW < INLINE_MIN_W) {
+      // 极端满行（末行文字占满列宽）：右对齐到父容器右缘，有界贴行尾，绝不落下方
+      maxW = INLINE_MIN_W
+      x = Math.round(pr!.right - 2) - maxW
     }
   } else if (limitRight - rightX >= need && !blockedBySibling(anchor, rightX, centeredY, naturalW, h)) {
     x = rightX
@@ -250,7 +289,7 @@ function place(anchor: Element, el: HTMLElement, vw: number, vh: number, lrx: nu
     // 空间不够：先让元素自己收一档（徽标会隐藏标签胶囊），收完还放不下才截断
     el.setAttribute('data-brmk-tight', '1')
     naturalW = el.offsetWidth || naturalW
-    if (naturalW > maxW) el.style.maxWidth = `${Math.max(MIN_W, Math.floor(maxW))}px`
+    if (naturalW > maxW) el.style.maxWidth = `${Math.max(floorW, Math.floor(maxW))}px`
   }
 
   const width = el.offsetWidth || naturalW

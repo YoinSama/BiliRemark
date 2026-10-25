@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliRemark
 // @namespace    https://github.com/YoinSama/BiliRemark
-// @version      1.6.1
+// @version      1.6.2
 // @author       Yoin
 // @description  B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。
 // @license      MIT
@@ -908,6 +908,178 @@
 		}
 	};
 	var store = new RemarkStore();
+	var FALLBACK_RGB = [
+		251,
+		113,
+		152
+	];
+	function parseColor(value) {
+		const v = (value || "").trim().toLowerCase();
+		if (!v) return null;
+		const hex = v.match(/^#([0-9a-f]{3,8})$/);
+		if (hex) {
+			let h = hex[1];
+			if (h.length === 3 || h.length === 4) h = h.split("").slice(0, 3).map((c) => c + c).join("");
+			if (h.length < 6) return null;
+			return [
+				parseInt(h.slice(0, 2), 16),
+				parseInt(h.slice(2, 4), 16),
+				parseInt(h.slice(4, 6), 16)
+			];
+		}
+		const rgb = v.match(/^rgba?\(([^)]+)\)$/);
+		if (rgb) {
+			const parts = rgb[1].split(/[,\s/]+/).filter(Boolean);
+			if (parts.length >= 3) {
+				const nums = parts.slice(0, 3).map((p) => p.endsWith("%") ? parseFloat(p) * 255 / 100 : parseFloat(p));
+				if (nums.every((n) => Number.isFinite(n))) return [
+					Math.round(nums[0]),
+					Math.round(nums[1]),
+					Math.round(nums[2])
+				];
+			}
+		}
+		return null;
+	}
+	function rgba(rgb, alpha) {
+		return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})`;
+	}
+	function toHex(rgb) {
+		return "#" + rgb.map((n) => Math.min(255, Math.max(0, Math.round(n))).toString(16).padStart(2, "0")).join("");
+	}
+	function cssVar(name) {
+		try {
+			return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+		} catch {
+			return "";
+		}
+	}
+	function relativeLuminance(rgb) {
+		const [r, g, b] = rgb.map((n) => {
+			const c = n / 255;
+			return c <= .03928 ? c / 12.92 : Math.pow((c + .055) / 1.055, 2.4);
+		});
+		return .2126 * r + .7152 * g + .0722 * b;
+	}
+	function luminanceOf(color) {
+		const rgb = parseColor(color);
+		return rgb ? relativeLuminance(rgb) : null;
+	}
+	function contrastOf(a, b) {
+		const la = relativeLuminance(a);
+		const lb = relativeLuminance(b);
+		return (Math.max(la, lb) + .05) / (Math.min(la, lb) + .05);
+	}
+	function readableOn(color, bg, min = 4.5) {
+		const fg = parseColor(color);
+		if (!fg) return color;
+		if (contrastOf(fg, bg) >= min) return color;
+		const target = relativeLuminance(bg) < .25 ? 255 : 0;
+		for (let t = .06; t <= .9; t += .06) {
+			const mix = fg.map((v) => v + (target - v) * t);
+			if (contrastOf(mix, bg) >= min) return toHex(mix);
+		}
+		return target === 255 ? "#e9e9e9" : "#18191c";
+	}
+	function readableBadgeColor(color, dark) {
+		if (!dark) return color;
+		let c = parseColor(color);
+		if (!c) return color;
+		const base = [
+			31,
+			31,
+			31
+		];
+		for (let i = 0; i < 6; i++) {
+			const pill = c.map((v, j) => Math.round(v * .14 + base[j] * .86));
+			if (contrastOf(c, pill) >= 3) return toHex(c);
+			const next = parseColor(readableOn(toHex(c), pill, 3));
+			if (!next) break;
+			c = next;
+		}
+		return toHex(c);
+	}
+	function bgLuminance(color) {
+		const m = color.match(/^rgba?\(([^)]+)\)$/);
+		if (!m) return null;
+		const parts = m[1].split(/[,\s/]+/).filter(Boolean);
+		if (parts.length < 3) return null;
+		const nums = parts.slice(0, 3).map((p) => p.endsWith("%") ? parseFloat(p) * 255 / 100 : parseFloat(p));
+		if (nums.some((n) => !Number.isFinite(n))) return null;
+		if (parts.length >= 4) {
+			const a = parseFloat(parts[3]);
+			if (Number.isFinite(a) && a <= .05) return null;
+		}
+		return relativeLuminance([
+			nums[0],
+			nums[1],
+			nums[2]
+		]);
+	}
+	function detectDark() {
+		if (document.documentElement.classList.contains("dark")) return true;
+		if (document.body?.classList.contains("dark")) return true;
+		if (document.documentElement.classList.contains("bili_dark")) return true;
+		if (document.body?.classList.contains("bili_dark")) return true;
+		if (document.documentElement.getAttribute("data-theme") === "dark") return true;
+		const scheme = document.querySelector("meta[name=\"color-scheme\"]")?.getAttribute("content")?.trim().toLowerCase();
+		if (scheme === "dark") return true;
+		if (scheme === "light") return false;
+		try {
+			for (const el of [document.body, document.documentElement]) {
+				if (!el) continue;
+				const lum = bgLuminance(getComputedStyle(el).backgroundColor);
+				if (lum !== null) return lum < .4;
+			}
+		} catch {}
+		return false;
+	}
+	function detectTheme() {
+		const rawColor = cssVar("--theme-color");
+		const rgb = parseColor(rawColor) ?? FALLBACK_RGB;
+		return {
+			dark: detectDark(),
+			color: rawColor || toHex(FALLBACK_RGB),
+			rgb,
+			evolved: !!rawColor
+		};
+	}
+	function watchTheme(callback) {
+		let timer = null;
+		const schedule = () => {
+			if (timer !== null) clearTimeout(timer);
+			timer = setTimeout(() => {
+				timer = null;
+				callback();
+			}, 250);
+		};
+		const obs = new MutationObserver(schedule);
+		try {
+			obs.observe(document.documentElement, {
+				attributes: true,
+				attributeFilter: [
+					"class",
+					"style",
+					"data-theme"
+				]
+			});
+			if (document.body) obs.observe(document.body, {
+				attributes: true,
+				attributeFilter: ["class", "style"]
+			});
+		} catch {}
+		let mq = null;
+		const onMq = () => schedule();
+		try {
+			mq = window.matchMedia("(prefers-color-scheme: dark)");
+			mq.addEventListener("change", onMq);
+		} catch {}
+		return () => {
+			obs.disconnect();
+			if (mq) mq.removeEventListener("change", onMq);
+			if (timer !== null) clearTimeout(timer);
+		};
+	}
 	var SVG_NS = "http://www.w3.org/2000/svg";
 	var PATHS = {
 		pencil: "M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z",
@@ -1231,6 +1403,7 @@
 	var SLOTS = ["badge", "pencil"];
 	var GAP = 6;
 	var MIN_W = 60;
+	var INLINE_MIN_W = 34;
 	var MARGIN = 4;
 	var POLL_MS = 200;
 	var byAnchor = new Map();
@@ -1346,6 +1519,22 @@
 		}
 		return right;
 	}
+	function lastTextRect(anchor) {
+		try {
+			const range = document.createRange();
+			range.selectNodeContents(anchor);
+			const rects = range.getClientRects();
+			if (!rects.length) return null;
+			const last = rects[rects.length - 1];
+			return {
+				right: last.right,
+				top: last.top,
+				height: last.height
+			};
+		} catch {
+			return null;
+		}
+	}
 	function place(anchor, el, vw, vh, lrx, lry) {
 		const r = anchor.getBoundingClientRect();
 		if (!r.width && !r.height) {
@@ -1389,13 +1578,30 @@
 		let y;
 		let maxW;
 		let fits = true;
-		if (el.getAttribute("data-brmk-place") === "below" && !!pr) {
+		const floorW = el.getAttribute("data-brmk-place") === "inline" ? INLINE_MIN_W : MIN_W;
+		const mode = el.getAttribute("data-brmk-place");
+		const wantBelow = mode === "below" && !!pr;
+		const wantInline = mode === "inline" && !!pr;
+		if (wantBelow) {
 			x = Math.max(MARGIN, Math.round(r.left));
 			y = Math.round(r.bottom + 2);
 			maxW = Math.round(pr.right - 2) - x;
 			if (maxW < need) {
 				fits = false;
 				maxW = Math.max(need, vw - 8 - x);
+			}
+		} else if (wantInline) {
+			const text = lastTextRect(anchor) ?? {
+				right: r.right,
+				top: r.top,
+				height: r.height
+			};
+			x = Math.round(text.right + GAP);
+			y = Math.round(text.top + (text.height - h) / 2);
+			maxW = Math.round(pr.right - 2) - x;
+			if (maxW < INLINE_MIN_W) {
+				maxW = INLINE_MIN_W;
+				x = Math.round(pr.right - 2) - maxW;
 			}
 		} else if (limitRight - rightX >= need && !blockedBySibling(anchor, rightX, centeredY, naturalW, h)) {
 			x = rightX;
@@ -1422,7 +1628,7 @@
 		if (naturalW > maxW) {
 			el.setAttribute("data-brmk-tight", "1");
 			naturalW = el.offsetWidth || naturalW;
-			if (naturalW > maxW) el.style.maxWidth = `${Math.max(MIN_W, Math.floor(maxW))}px`;
+			if (naturalW > maxW) el.style.maxWidth = `${Math.max(floorW, Math.floor(maxW))}px`;
 		}
 		const width = el.offsetWidth || naturalW;
 		if (!fits) {
@@ -1571,139 +1777,6 @@
 	function count(slot) {
 		return list(slot).length;
 	}
-	var FALLBACK_RGB = [
-		251,
-		113,
-		152
-	];
-	function parseColor(value) {
-		const v = (value || "").trim().toLowerCase();
-		if (!v) return null;
-		const hex = v.match(/^#([0-9a-f]{3,8})$/);
-		if (hex) {
-			let h = hex[1];
-			if (h.length === 3 || h.length === 4) h = h.split("").slice(0, 3).map((c) => c + c).join("");
-			if (h.length < 6) return null;
-			return [
-				parseInt(h.slice(0, 2), 16),
-				parseInt(h.slice(2, 4), 16),
-				parseInt(h.slice(4, 6), 16)
-			];
-		}
-		const rgb = v.match(/^rgba?\(([^)]+)\)$/);
-		if (rgb) {
-			const parts = rgb[1].split(/[,\s/]+/).filter(Boolean);
-			if (parts.length >= 3) {
-				const nums = parts.slice(0, 3).map((p) => p.endsWith("%") ? parseFloat(p) * 255 / 100 : parseFloat(p));
-				if (nums.every((n) => Number.isFinite(n))) return [
-					Math.round(nums[0]),
-					Math.round(nums[1]),
-					Math.round(nums[2])
-				];
-			}
-		}
-		return null;
-	}
-	function rgba(rgb, alpha) {
-		return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})`;
-	}
-	function toHex(rgb) {
-		return "#" + rgb.map((n) => Math.min(255, Math.max(0, Math.round(n))).toString(16).padStart(2, "0")).join("");
-	}
-	function cssVar(name) {
-		try {
-			return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-		} catch {
-			return "";
-		}
-	}
-	function relativeLuminance(rgb) {
-		const [r, g, b] = rgb.map((n) => {
-			const c = n / 255;
-			return c <= .03928 ? c / 12.92 : Math.pow((c + .055) / 1.055, 2.4);
-		});
-		return .2126 * r + .7152 * g + .0722 * b;
-	}
-	function luminanceOf(color) {
-		const rgb = parseColor(color);
-		return rgb ? relativeLuminance(rgb) : null;
-	}
-	function contrastOf(a, b) {
-		const la = relativeLuminance(a);
-		const lb = relativeLuminance(b);
-		return (Math.max(la, lb) + .05) / (Math.min(la, lb) + .05);
-	}
-	function readableOn(color, bg, min = 4.5) {
-		const fg = parseColor(color);
-		if (!fg) return color;
-		if (contrastOf(fg, bg) >= min) return color;
-		const target = relativeLuminance(bg) < .25 ? 255 : 0;
-		for (let t = .06; t <= .9; t += .06) {
-			const mix = fg.map((v) => v + (target - v) * t);
-			if (contrastOf(mix, bg) >= min) return toHex(mix);
-		}
-		return target === 255 ? "#e9e9e9" : "#18191c";
-	}
-	function detectDark() {
-		const fg = cssVar("--foreground-color");
-		if (fg === "white" || fg === "#fff" || fg === "#ffffff") return true;
-		if (fg === "black" || fg === "#000" || fg === "#000000") return false;
-		if (document.documentElement.classList.contains("dark")) return true;
-		if (document.body?.classList.contains("dark")) return true;
-		if (document.documentElement.getAttribute("data-theme") === "dark") return true;
-		try {
-			const bg = getComputedStyle(document.body).backgroundColor;
-			const lum = luminanceOf(bg);
-			if (lum !== null) return lum < .4;
-		} catch {}
-		return false;
-	}
-	function detectTheme() {
-		const rawColor = cssVar("--theme-color");
-		const rgb = parseColor(rawColor) ?? FALLBACK_RGB;
-		return {
-			dark: detectDark(),
-			color: rawColor || toHex(FALLBACK_RGB),
-			rgb,
-			evolved: !!rawColor
-		};
-	}
-	function watchTheme(callback) {
-		let timer = null;
-		const schedule = () => {
-			if (timer !== null) clearTimeout(timer);
-			timer = setTimeout(() => {
-				timer = null;
-				callback();
-			}, 250);
-		};
-		const obs = new MutationObserver(schedule);
-		try {
-			obs.observe(document.documentElement, {
-				attributes: true,
-				attributeFilter: [
-					"class",
-					"style",
-					"data-theme"
-				]
-			});
-			if (document.body) obs.observe(document.body, {
-				attributes: true,
-				attributeFilter: ["class", "style"]
-			});
-		} catch {}
-		let mq = null;
-		const onMq = () => schedule();
-		try {
-			mq = window.matchMedia("(prefers-color-scheme: dark)");
-			mq.addEventListener("change", onMq);
-		} catch {}
-		return () => {
-			obs.disconnect();
-			if (mq) mq.removeEventListener("change", onMq);
-			if (timer !== null) clearTimeout(timer);
-		};
-	}
 	var current = {
 		dark: false,
 		color: "#FB7299",
@@ -1810,6 +1883,10 @@
 /* 浮层给的空间不够时（portal 打的标记），先让位给备注名，标签胶囊收起 */
 .brmk-badge[data-brmk-tight] .brmk-tags{ display:none; }
 .brmk-badge[data-brmk-tight] .brmk-name{ max-width:100%; }
+/* 行内挂法（关系卡：贴昵称文字右侧——锚点是块级全宽元素，portal 用 Range 量文字右缘定位）：
+   备注名允许在徽标自身 maxWidth 内收缩省略，标签不参与收缩（tight 时整体隐藏） */
+.brmk-badge[data-brmk-place="inline"] .brmk-name{ min-width:0; max-width:none; }
+.brmk-badge[data-brmk-place="inline"] .brmk-tags{ flex:0 0 auto; }
 /* 内联挂法（评论区夹在昵称和等级之间）：边距对齐原生昵称行节奏 ——
    真机实测等级图标 margin-left 5px，徽标跟它同节奏；右侧不另加，
    让后面元素（等级图标）自带的 5px 左边距生效 */
@@ -1819,8 +1896,9 @@
 @keyframes brmk-badge-in{ from{ opacity:0 } }
 
 /* S5 视频页右栏三行布局：备注行作为卡片 .info 内的一行（.upname 与 .playinfo 之间）。
-   进入文档流前先隐藏，插入后靠这个类显现（替代浮层的定位职责） */
-.brmk-card-badge-row{ margin:3px 0 0; line-height:1.6; }
+   边距对齐原生节奏（2026-10-25 实测：.upname 上下 margin 2px、字号 13px/行高 15px、.playinfo 高 18px）：
+   display:flex 消除 inline 徽标 baseline 对齐带来的不对称空隙，行高 = 徽标实际高度 */
+.brmk-card-badge-row{ display:flex; margin:2px 0; }
 .brmk-card-badge-row .brmk-badge{ max-width:100%; animation:brmk-badge-in .16s ease-out; }
 
 .brmk-pencil{
@@ -2283,6 +2361,7 @@
 		badge.setAttribute("role", "button");
 		badge.tabIndex = 0;
 		if (options.placeBelow) badge.setAttribute("data-brmk-place", "below");
+		if (options.placeInline) badge.setAttribute("data-brmk-place", "inline");
 		badge.addEventListener("click", (ev) => {
 			ev.preventDefault();
 			ev.stopPropagation();
@@ -2337,7 +2416,7 @@
 	}
 	function paintBadge(badge, record, options) {
 		badge.setAttribute("data-brmk-mid", record.mid);
-		badge.style.setProperty("--brmk-c", record.color ?? getTheme().color);
+		badge.style.setProperty("--brmk-c", readableBadgeColor(record.color ?? getTheme().color, getTheme().dark));
 		badge.classList.toggle("brmk-hover-only", !!options.showOnHoverOnly);
 		const signature = badgeSignature(record, options);
 		if (badge.dataset.brmkSig !== signature) {
@@ -2372,7 +2451,10 @@
 			inlineBadges.add(badge);
 		}
 		if (badge.previousElementSibling !== reference) reference.after(badge);
+		badge.style.marginLeft = options.inlineGap ? `${options.inlineGap}px` : "";
 		paintBadge(badge, record, options);
+		detach(reference, "pencil");
+		refresh();
 		return badge;
 	}
 	function removeBadge(mid) {
@@ -2398,7 +2480,7 @@
 			get(anchor, "pencil")?.classList.remove("brmk-pencil-on");
 		}, HIDE_DELAY));
 	}
-	function ensurePencil(anchor, mid, nickname, scene) {
+	function ensurePencil(anchor, mid, nickname, scene, placeInline = false) {
 		if (!anchor.isConnected) return;
 		if (get(anchor, "badge")) return;
 		let pencil = get(anchor, "pencil");
@@ -2407,6 +2489,7 @@
 			btn.type = "button";
 			btn.title = "给 TA 加备注";
 			btn.setAttribute("aria-label", "给 TA 加备注");
+			if (placeInline) btn.setAttribute("data-brmk-place", "inline");
 			btn.appendChild(icon("pencil", 9));
 			attach(anchor, "pencil", btn);
 			pencil = btn;
@@ -2667,8 +2750,8 @@
 		return !!qs(".bili-video-card, .video-page-card-small .upname");
 	}
 	var SIDE_ITEM = ".video-page-card-small";
-	var ROW_MIN_AGE_MS = 3e3;
-	var rowFirstSeen = new WeakMap();
+	var ROW_MIN_AGE_MS$1 = 3e3;
+	var rowFirstSeen$1 = new WeakMap();
 	function isSidebarAnchor(anchor) {
 		return !!anchor.closest(SIDE_ITEM);
 	}
@@ -2681,18 +2764,19 @@
 			return;
 		}
 		const now = Date.now();
-		const born = rowFirstSeen.get(upname);
+		const born = rowFirstSeen$1.get(upname);
 		if (born === void 0) {
-			rowFirstSeen.set(upname, now);
+			rowFirstSeen$1.set(upname, now);
 			return;
 		}
-		if (now - born < ROW_MIN_AGE_MS) return;
+		if (now - born < ROW_MIN_AGE_MS$1) return;
 		const play = info.querySelector(".playinfo");
 		if (!play || !play.textContent?.trim()) return;
 		const sig = badgeSignature(record, options);
 		const existing = info.querySelector(":scope > .brmk-card-badge-row");
 		if (!existing) {
 			const row = h("div", "brmk-card-badge-row");
+			row.setAttribute("data-brmk-mid", record.mid);
 			row.appendChild(buildBadgeElement(record, options));
 			const next = upname.nextElementSibling;
 			try {
@@ -3074,6 +3158,9 @@
 	function faceFromRow(row) {
 		return row.querySelector("img[src*=\"/bfs/face/\"]")?.getAttribute("src") ?? "";
 	}
+	var ROW_MIN_AGE_MS = 3e3;
+	var rowFirstSeen = new WeakMap();
+	var imInline = new Set();
 	function pickTargets$1() {
 		const rows = qsa(ROW_SELECTOR).filter((el) => isRowContainer(el) && isVisible(el));
 		const contacts = qsa(CONTACT_SELECTOR).filter((el) => isVisible(el));
@@ -3146,7 +3233,13 @@
 		});
 	}
 	function inject$1(targets) {
-		const opts = {
+		const rowOpts = {
+			...badgeOptions(),
+			scene: "message",
+			showTags: false,
+			inlineGap: 6
+		};
+		const headerOpts = {
 			...badgeOptions(),
 			scene: "message"
 		};
@@ -3156,16 +3249,37 @@
 			rememberNick(target.mid, target.nickname);
 			if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face);
 			const record = store.get(target.mid);
-			if (record) {
-				if (renderBadge(target.anchor, record, opts)) injected++;
-			} else if (target.lazy) bindLazyPencil$1(target.anchor, target.mid, target.nickname);
-			else ensurePencil(target.anchor, target.mid, target.nickname, "message");
+			if (!record) {
+				if (target.lazy) bindLazyPencil$1(target.anchor, target.mid, target.nickname);
+				else ensurePencil(target.anchor, target.mid, target.nickname, "message");
+				continue;
+			}
+			if (!target.lazy) {
+				if (renderBadge(target.anchor, record, headerOpts)) injected++;
+				continue;
+			}
+			if (!target.anchor.parentElement?.className.includes("SessionItem__Title")) {
+				if (renderBadge(target.anchor, record, rowOpts)) injected++;
+				continue;
+			}
+			const born = rowFirstSeen.get(target.anchor);
+			if (born === void 0) {
+				rowFirstSeen.set(target.anchor, Date.now());
+				continue;
+			}
+			if (Date.now() - born < ROW_MIN_AGE_MS) continue;
+			const el = renderInlineBadge(target.anchor, record, rowOpts);
+			if (el) {
+				imInline.add(el);
+				injected++;
+			}
 		}
 		return injected;
 	}
 	function scanIm() {
 		const { targets, hits } = pickTargets$1();
 		let injected = 0;
+		for (const el of imInline) if (!el.isConnected) imInline.delete(el);
 		if (getSettings().scenes.message && getSettings().enabled) injected = inject$1(targets);
 		const diag = {
 			scene: "message",
@@ -3181,6 +3295,8 @@
 	}
 	function clearImPencils() {
 		clearPencilsOfScene("message");
+		for (const el of imInline) el.remove();
+		imInline.clear();
 	}
 	var SPACE_HOST_RE$1 = /(^|\.)space\.bilibili\.com$/i;
 	var FIXTURE_ATTR$1 = "data-brmk-relation-fixture";
@@ -3245,14 +3361,15 @@
 		lazyBound.add(anchor);
 		anchor.addEventListener("mouseenter", () => {
 			if (!anchor.isConnected) return;
-			ensurePencil(anchor, mid, nickname, "relation");
+			ensurePencil(anchor, mid, nickname, "relation", true);
 			showPencil(anchor);
 		});
 	}
 	function inject(targets) {
 		const opts = {
 			...badgeOptions(),
-			scene: "relation"
+			scene: "relation",
+			placeInline: true
 		};
 		let injected = 0;
 		for (const target of targets) {
@@ -4978,7 +5095,7 @@
 	function doctorEnabled() {
 		return getSettings().advanced.debug;
 	}
-	var VERSION = "1.6.1";
+	var VERSION = "1.6.2";
 	var APP_NS = "__biliRemark__";
 	var observer = null;
 	var scanTimer = null;
@@ -4987,7 +5104,7 @@
 	var themeCleanup = null;
 	var lastUrl = location.href;
 	var started = false;
-	var OWN_SELECTOR = "#brmk-manager, #brmk-editor, #brmk-toast, #brmk-doctor, #brmk-fab, #brmk-space-card, #brmk-layer, .brmk-badge, .brmk-pencil, #brmk-style";
+	var OWN_SELECTOR = "#brmk-manager, #brmk-editor, #brmk-toast, #brmk-doctor, #brmk-fab, #brmk-space-card, #brmk-layer, .brmk-badge, .brmk-pencil, .brmk-card-badge-row, #brmk-style";
 	function isOwnNode(node) {
 		if (!node) return false;
 		const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
@@ -5000,9 +5117,12 @@
 	}
 	function mutationsAreOurs(records) {
 		for (const record of records) {
+			const added = Array.from(record.addedNodes);
+			const removed = Array.from(record.removedNodes);
+			if ((added.length || removed.length) && added.every(isOwnNode) && removed.every(isOwnNode)) continue;
 			if (!isOwnNode(record.target)) return false;
-			for (const node of Array.from(record.addedNodes)) if (!isOwnNode(node)) return false;
-			for (const node of Array.from(record.removedNodes)) if (!isOwnNode(node)) return false;
+			for (const node of added) if (!isOwnNode(node)) return false;
+			for (const node of removed) if (!isOwnNode(node)) return false;
 		}
 		return true;
 	}

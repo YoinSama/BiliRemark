@@ -113,6 +113,10 @@ function buildCss(theme: ThemeInfo): string {
 /* 浮层给的空间不够时（portal 打的标记），先让位给备注名，标签胶囊收起 */
 .brmk-badge[data-brmk-tight] .brmk-tags{ display:none; }
 .brmk-badge[data-brmk-tight] .brmk-name{ max-width:100%; }
+/* 行内挂法（关系卡：贴昵称文字右侧——锚点是块级全宽元素，portal 用 Range 量文字右缘定位）：
+   备注名允许在徽标自身 maxWidth 内收缩省略，标签不参与收缩（tight 时整体隐藏） */
+.brmk-badge[data-brmk-place="inline"] .brmk-name{ min-width:0; max-width:none; }
+.brmk-badge[data-brmk-place="inline"] .brmk-tags{ flex:0 0 auto; }
 /* 内联挂法（评论区夹在昵称和等级之间）：边距对齐原生昵称行节奏 ——
    真机实测等级图标 margin-left 5px，徽标跟它同节奏；右侧不另加，
    让后面元素（等级图标）自带的 5px 左边距生效 */
@@ -122,8 +126,9 @@ function buildCss(theme: ThemeInfo): string {
 @keyframes brmk-badge-in{ from{ opacity:0 } }
 
 /* S5 视频页右栏三行布局：备注行作为卡片 .info 内的一行（.upname 与 .playinfo 之间）。
-   进入文档流前先隐藏，插入后靠这个类显现（替代浮层的定位职责） */
-.brmk-card-badge-row{ margin:3px 0 0; line-height:1.6; }
+   边距对齐原生节奏（2026-10-25 实测：.upname 上下 margin 2px、字号 13px/行高 15px、.playinfo 高 18px）：
+   display:flex 消除 inline 徽标 baseline 对齐带来的不对称空隙，行高 = 徽标实际高度 */
+.brmk-card-badge-row{ display:flex; margin:2px 0; }
 .brmk-card-badge-row .brmk-badge{ max-width:100%; animation:brmk-badge-in .16s ease-out; }
 
 .brmk-pencil{

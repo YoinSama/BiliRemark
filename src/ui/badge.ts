@@ -1,4 +1,5 @@
 import { getSettings } from '../core/config'
+import { readableBadgeColor } from '../core/env'
 import { store } from '../core/store'
 import type { SceneKey, UserRecord } from '../core/types'
 import { h } from '../util/dom'
@@ -15,6 +16,11 @@ export interface BadgeOptions {
   scene?: SceneKey
   /** 徽标摆到锚点行下方、与锚点左缘对齐（首页/搜索卡片专用；portal 按 data-brmk-place 选址） */
   placeBelow?: boolean
+  /** 徽标贴锚点文字右侧同行（关系卡专用：锚点是块级全宽元素，portal 用 Range 量末行文字右缘定位，
+   *  宽度收敛在父容器右缘、永不落下方——空间不足按 tight → maxWidth 收缩） */
+  placeInline?: boolean
+  /** 内联徽标与锚点（昵称）的左边距 px；不传用主题 .brmk-inline 默认 5px（私信行 6px） */
+  inlineGap?: number
 }
 
 interface PencilMeta {
@@ -61,6 +67,7 @@ function createBadge(mid: string, options: BadgeOptions): HTMLElement {
   badge.setAttribute('role', 'button')
   badge.tabIndex = 0
   if (options.placeBelow) badge.setAttribute('data-brmk-place', 'below')
+  if (options.placeInline) badge.setAttribute('data-brmk-place', 'inline')
   badge.addEventListener('click', (ev) => {
     ev.preventDefault()
     ev.stopPropagation()
@@ -124,7 +131,7 @@ export function badgeSignature(record: UserRecord, options: BadgeOptions): strin
 /** 徽标内容与外观的公共部分（portal / 内联 / 卡片内备注行三种挂法共用） */
 function paintBadge(badge: HTMLElement, record: UserRecord, options: BadgeOptions): void {
   badge.setAttribute('data-brmk-mid', record.mid)
-  badge.style.setProperty('--brmk-c', record.color ?? getTheme().color)
+  badge.style.setProperty('--brmk-c', readableBadgeColor(record.color ?? getTheme().color, getTheme().dark))
   badge.classList.toggle('brmk-hover-only', !!options.showOnHoverOnly)
 
   // 内容没变就不重建 DOM，避免每轮巡检都产生无意义的节点抖动
@@ -172,7 +179,11 @@ export function renderInlineBadge(reference: Element, record: UserRecord, option
   }
   // 被组件重渲染挤走时搬回原位；已在原位时不动（避免无意义的 mutation 自激扫描）
   if (badge.previousElementSibling !== reference) reference.after(badge)
+  badge.style.marginLeft = options.inlineGap ? `${options.inlineGap}px` : ''
   paintBadge(badge, record, options)
+  // 已经备注了就不需要铅笔入口（与 renderBadge 同规则；铅笔常锚在同一昵称元素上）
+  portal.detach(reference, 'pencil')
+  portal.refresh()
   return badge
 }
 
@@ -213,8 +224,15 @@ function hidePencilSoon(anchor: Element): void {
 /**
  * 未备注用户的 hover 铅笔入口：默认隐藏，锚点 hover 时出现在锚点旁边（浮层里）。
  * 鼠标从昵称移向铅笔会先触发 mouseleave，所以用「延迟隐藏 + 铅笔自身 hover 取消」。
+ * placeInline（关系卡）：铅笔同样贴锚点文字右侧同行（portal inline 选址）。
  */
-export function ensurePencil(anchor: Element, mid: string, nickname: string, scene?: SceneKey): void {
+export function ensurePencil(
+  anchor: Element,
+  mid: string,
+  nickname: string,
+  scene?: SceneKey,
+  placeInline = false,
+): void {
   if (!anchor.isConnected) return
   if (portal.get(anchor, 'badge')) return
 
@@ -224,6 +242,7 @@ export function ensurePencil(anchor: Element, mid: string, nickname: string, sce
     btn.type = 'button'
     btn.title = '给 TA 加备注'
     btn.setAttribute('aria-label', '给 TA 加备注')
+    if (placeInline) btn.setAttribute('data-brmk-place', 'inline')
     btn.appendChild(icon('pencil', 9))
     portal.attach(anchor, 'pencil', btn)
     pencil = btn

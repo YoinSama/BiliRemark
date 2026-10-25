@@ -2,7 +2,7 @@ import { getSettings } from '../core/config'
 import { resolveFromElement, snapshotNickname } from '../core/midResolver'
 import { faceOf, rememberFace, rememberNick, setDiagnostic, type SceneDiagnostic } from '../core/runtime'
 import { store } from '../core/store'
-import { badgeOptions, clearPencilsOfScene, ensurePencil, renderBadge, showPencil } from '../ui/badge'
+import { badgeOptions, clearPencilsOfScene, ensurePencil, renderBadge, renderInlineBadge, showPencil } from '../ui/badge'
 import { isVisible, qs, qsa } from '../util/dom'
 
 /**
@@ -74,6 +74,17 @@ interface ImTarget {
   lazy: boolean
 }
 
+/**
+ * 会话行徽标 = 内联进 Title 文档流（v1.6.2，主人拍板）：portal「昵称行下方」落位会叠压
+ * 第二行的消息预览，改贴用户名后面（S2 评论区受控内联同款）——只显示备注名不显示 tag
+ * （showTags:false），与昵称的边距 6px（BadgeOptions.inlineGap，标题行原生 gap 为 0）。
+ * 内联节点插进 Vue 渲染的 Title，沿用 S5 侧栏行的 3s 年龄门控避开挂载风暴。
+ */
+const ROW_MIN_AGE_MS = 3000
+const rowFirstSeen = new WeakMap<Element, number>()
+/** 本场景内联徽标登记：关闭场景时随铅笔一起撤（clearPencilsOfScene 只管 portal 铅笔） */
+const imInline = new Set<HTMLElement>()
+
 function pickTargets(): { targets: ImTarget[]; hits: { selector: string; hits: number }[] } {
   const rows = qsa(ROW_SELECTOR).filter((el) => isRowContainer(el) && isVisible(el))
   const contacts = qsa(CONTACT_SELECTOR).filter((el) => isVisible(el))
@@ -130,19 +141,39 @@ function bindLazyPencil(anchor: Element, mid: string, nickname: string): void {
 }
 
 function inject(targets: ImTarget[]): number {
-  const opts = { ...badgeOptions(), scene: 'message' as const }
+  const rowOpts = { ...badgeOptions(), scene: 'message' as const, showTags: false, inlineGap: 6 }
+  const headerOpts = { ...badgeOptions(), scene: 'message' as const }
   let injected = 0
   for (const target of targets) {
     if (!target.anchor.isConnected) continue
     rememberNick(target.mid, target.nickname)
     if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face)
     const record = store.get(target.mid)
-    if (record) {
-      if (renderBadge(target.anchor, record, opts)) injected++
-    } else if (target.lazy) {
-      bindLazyPencil(target.anchor, target.mid, target.nickname)
-    } else {
-      ensurePencil(target.anchor, target.mid, target.nickname, 'message')
+    if (!record) {
+      if (target.lazy) bindLazyPencil(target.anchor, target.mid, target.nickname)
+      else ensurePencil(target.anchor, target.mid, target.nickname, 'message')
+      continue
+    }
+    if (!target.lazy) {
+      // 聊天头部：portal 贴名右侧（空间充裕，保留 tag），维持 v1.5 形态
+      if (renderBadge(target.anchor, record, headerOpts)) injected++
+      continue
+    }
+    // 会话行：内联进 Title（锚点 = 昵称元素；锚点降级为行容器时不内联，退 portal 保底）
+    if (!target.anchor.parentElement?.className.includes('SessionItem__Title')) {
+      if (renderBadge(target.anchor, record, rowOpts)) injected++
+      continue
+    }
+    const born = rowFirstSeen.get(target.anchor)
+    if (born === undefined) {
+      rowFirstSeen.set(target.anchor, Date.now())
+      continue
+    }
+    if (Date.now() - born < ROW_MIN_AGE_MS) continue
+    const el = renderInlineBadge(target.anchor, record, rowOpts)
+    if (el) {
+      imInline.add(el)
+      injected++
     }
   }
   return injected
@@ -151,6 +182,7 @@ function inject(targets: ImTarget[]): number {
 export function scanIm(): SceneDiagnostic {
   const { targets, hits } = pickTargets()
   let injected = 0
+  for (const el of imInline) if (!el.isConnected) imInline.delete(el)
   if (getSettings().scenes.message && getSettings().enabled) {
     injected = inject(targets)
   }
@@ -169,7 +201,9 @@ export function scanIm(): SceneDiagnostic {
   return diag
 }
 
-/** 关闭场景时移除本场景的铅笔入口（按场景清理） */
+/** 关闭场景时移除本场景的铅笔与行内徽标（按场景清理；portal 头部徽标由 pruneBadges/路由清理兜底） */
 export function clearImPencils(): void {
   clearPencilsOfScene('message')
+  for (const el of imInline) el.remove()
+  imInline.clear()
 }
