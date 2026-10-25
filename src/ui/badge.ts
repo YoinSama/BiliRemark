@@ -5,7 +5,7 @@ import { h } from '../util/dom'
 import { icon } from './icons'
 import { openEditor } from './editor'
 import * as portal from './portal'
-import { getTheme } from './theme'
+import { ensureShadowStyle, getTheme } from './theme'
 
 export interface BadgeOptions {
   showTags: boolean
@@ -13,6 +13,8 @@ export interface BadgeOptions {
   maxTags: number
   showOnHoverOnly: boolean
   scene?: SceneKey
+  /** 徽标摆到锚点行下方、与锚点左缘对齐（首页/搜索卡片专用；portal 按 data-brmk-place 选址） */
+  placeBelow?: boolean
 }
 
 interface PencilMeta {
@@ -58,6 +60,7 @@ function createBadge(mid: string, options: BadgeOptions): HTMLElement {
   const badge = h('span', 'brmk-badge')
   badge.setAttribute('role', 'button')
   badge.tabIndex = 0
+  if (options.placeBelow) badge.setAttribute('data-brmk-place', 'below')
   badge.addEventListener('click', (ev) => {
     ev.preventDefault()
     ev.stopPropagation()
@@ -94,13 +97,17 @@ export function renderBadge(anchor: Element, record: UserRecord, options: BadgeO
     badge = createBadge(record.mid, options)
     portal.attach(anchor, 'badge', badge)
   }
+  paintBadge(badge, record, options)
 
-  badge.setAttribute('data-brmk-mid', record.mid)
-  badge.style.setProperty('--brmk-c', record.color ?? getTheme().color)
-  badge.classList.toggle('brmk-hover-only', !!options.showOnHoverOnly)
+  // 已经备注了就不需要铅笔入口
+  portal.detach(anchor, 'pencil')
+  portal.refresh()
+  return badge
+}
 
-  // 内容没变就不重建 DOM，避免每轮巡检都产生无意义的节点抖动
-  const signature = [
+/** 徽标内容签名（卡片内备注行用它判断巡检间是否需要重建 DOM） */
+export function badgeSignature(record: UserRecord, options: BadgeOptions): string {
+  return [
     record.remark,
     record.tags.join('\u0001'),
     record.color ?? '',
@@ -112,14 +119,60 @@ export function renderBadge(anchor: Element, record: UserRecord, options: BadgeO
     options.showOnHoverOnly ? 1 : 0,
     getTheme().color,
   ].join('\u0002')
+}
+
+/** 徽标内容与外观的公共部分（portal / 内联 / 卡片内备注行三种挂法共用） */
+function paintBadge(badge: HTMLElement, record: UserRecord, options: BadgeOptions): void {
+  badge.setAttribute('data-brmk-mid', record.mid)
+  badge.style.setProperty('--brmk-c', record.color ?? getTheme().color)
+  badge.classList.toggle('brmk-hover-only', !!options.showOnHoverOnly)
+
+  // 内容没变就不重建 DOM，避免每轮巡检都产生无意义的节点抖动
+  const signature = badgeSignature(record, options)
   if (badge.dataset.brmkSig !== signature) {
     buildBadgeContent(badge, record, options)
     badge.dataset.brmkSig = signature
   }
+}
 
-  // 已经备注了就不需要铅笔入口
-  portal.detach(anchor, 'pencil')
-  portal.refresh()
+/** 构造填好内容的徽标元素（不挂浮层、不进文档流）——S5 视频页右栏的「卡片内备注行」复用 */
+export function buildBadgeElement(record: UserRecord, options: BadgeOptions): HTMLElement {
+  const badge = createBadge(record.mid, options)
+  paintBadge(badge, record, options)
+  return badge
+}
+
+/**
+ * 内联徽标：插到 reference 元素之后、随文档流排布（评论区「昵称和等级之间」专用）。
+ * 必须进文档流：夹在两个原生元素之间靠文档流把后面的元素推开，浮层悬盖做不到。
+ * 只进 user-info 的 shadow 树（Lit 组件对外来节点容忍），页面容器仍然零插入。
+ */
+const inlineBadges = new Set<HTMLElement>()
+
+export function renderInlineBadge(reference: Element, record: UserRecord, options: BadgeOptions): HTMLElement | null {
+  if (!record.remark && !record.tags.length) {
+    removeBadge(record.mid)
+    return null
+  }
+  const parent = reference.parentElement
+  if (!parent || !reference.isConnected) return null
+  const root = reference.getRootNode()
+  if (root instanceof ShadowRoot) ensureShadowStyle(root)
+
+  let badge = parent.querySelector<HTMLElement>(':scope > .brmk-badge')
+  if (badge && badge.getAttribute('data-brmk-mid') !== record.mid) {
+    badge.remove()
+    inlineBadges.delete(badge)
+    badge = null
+  }
+  if (!badge) {
+    badge = createBadge(record.mid, options)
+    badge.classList.add('brmk-inline')
+    inlineBadges.add(badge)
+  }
+  // 被组件重渲染挤走时搬回原位；已在原位时不动（避免无意义的 mutation 自激扫描）
+  if (badge.previousElementSibling !== reference) reference.after(badge)
+  paintBadge(badge, record, options)
   return badge
 }
 
@@ -127,9 +180,16 @@ export function removeBadge(mid: string): void {
   for (const el of portal.list('badge')) {
     if (el.getAttribute('data-brmk-mid') === mid) portal.removeEl(el)
   }
+  for (const el of inlineBadges) {
+    if (el.getAttribute('data-brmk-mid') === mid) {
+      el.remove()
+      inlineBadges.delete(el)
+    }
+  }
 }
 
-function showPencil(anchor: Element): void {
+/** 显示锚点旁的铅笔（供 S5 卡片场景的按需铅笔在首次 hover 创建后立即显示） */
+export function showPencil(anchor: Element): void {
   const timer = hideTimers.get(anchor)
   if (timer !== undefined) {
     window.clearTimeout(timer)
@@ -203,16 +263,46 @@ export function pruneBadges(): void {
     const rec = store.get(mid)
     if (!rec || (!rec.remark && !rec.tags.length)) portal.removeEl(el)
   }
+  for (const el of inlineBadges) {
+    if (!el.isConnected) {
+      inlineBadges.delete(el)
+      continue
+    }
+    const mid = el.getAttribute('data-brmk-mid') ?? ''
+    const rec = store.get(mid)
+    if (!rec || (!rec.remark && !rec.tags.length)) {
+      el.remove()
+      inlineBadges.delete(el)
+    }
+  }
+}
+
+/**
+ * 按场景清理铅笔入口（场景开关关闭时）。
+ * 必须按 scene 区分：portal.clearSlot('pencil') 会把其它场景的铅笔一起清掉，
+ * 多场景共存时（如 opus 页动态作者 + 评论区）会让巡检每轮删掉重建，hover 到一半铅笔消失。
+ */
+export function clearPencilsOfScene(scene: SceneKey): void {
+  for (const el of portal.list('pencil')) {
+    if (pencilMeta.get(el)?.scene === scene) portal.removeEl(el)
+  }
 }
 
 /** 当前页面上已注入的徽标数量（体检用） */
 export function badgeCount(): number {
-  return portal.count('badge')
+  let count = portal.count('badge')
+  for (const el of inlineBadges) {
+    if (el.isConnected) count++
+    else inlineBadges.delete(el)
+  }
+  return count
 }
 
 /** 清空所有注入的徽标与铅笔（路由变化 / 关闭场景） */
 export function clearAll(): void {
   portal.clear()
+  for (const el of inlineBadges) el.remove()
+  inlineBadges.clear()
 }
 
 export function badgeOptions(): BadgeOptions {

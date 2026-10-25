@@ -1,6 +1,7 @@
 import { LIMITS, TAG_PRESET_COLORS } from '../core/constants'
 import { getSettings, resetSettings, updateSettings } from '../core/config'
 import { nickCache } from '../core/runtime'
+import { requestFaceBackfill } from '../core/faceFetch'
 import { store, normalizeRecord } from '../core/store'
 import type { MergeStrategy, SceneKey, UserRecord } from '../core/types'
 import { on } from '../core/bus'
@@ -433,6 +434,9 @@ function renderTable(r: Refs): void {
 
   renderPager(r, list.length, totalPages)
   renderBatchBar(r)
+
+  // 旧数据缺头像快照：对当前页懒加载补全，落库后经 data-changed 重渲染显示
+  requestFaceBackfill(rows.filter((rec) => !rec.faceSnapshot).map((rec) => rec.mid))
 }
 
 function renderPager(r: Refs, total: number, totalPages: number): void {
@@ -511,17 +515,22 @@ function renderSettings(r: Refs): void {
   /** 场景说明：未实现的场景统一标「后续版本」 */
   const SCENE_HINTS: Partial<Record<SceneKey, string>> = {
     videoUp: '视频页 UP 主昵称旁显示备注',
+    comment: '评论者昵称旁显示备注（主楼 + 楼中楼回复）',
     space: '个人空间右侧侧栏显示独立备注卡片',
+    dynamic: '动态发布者昵称旁显示备注（opus 图文动态）',
+    card: '卡片 UP 主昵称旁显示备注（首页 / 搜索 / 视频页右栏）',
+    relation: '关系列表用户昵称旁显示备注（粉丝 / 关注两个子页）',
+    message: '私信会话列表与聊天窗对方昵称旁显示备注',
   }
   const sceneDefs: { key: SceneKey; soon: boolean }[] = [
     { key: 'videoUp', soon: false },
-    { key: 'comment', soon: true },
+    { key: 'comment', soon: false },
     { key: 'space', soon: false },
-    { key: 'dynamic', soon: true },
-    { key: 'card', soon: true },
+    { key: 'dynamic', soon: false },
+    { key: 'card', soon: false },
     { key: 'live', soon: true },
-    { key: 'relation', soon: true },
-    { key: 'message', soon: true },
+    { key: 'relation', soon: false },
+    { key: 'message', soon: false },
   ]
   for (const def of sceneDefs) {
     scenes.appendChild(

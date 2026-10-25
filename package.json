@@ -1,14 +1,15 @@
 {
   "name": "bili-remark",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.6.1",
   "description": "B 站网页端本地用户备注油猴脚本",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "build:fast": "vite build",
-    "test": "node tests/run.mjs"
+    "test:unit": "tsc -p tests/tsconfig.unit.json && node tests/unit-core.mjs",
+    "test": "npm run test:unit && node tests/run.mjs"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

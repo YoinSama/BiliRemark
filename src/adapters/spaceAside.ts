@@ -1,18 +1,18 @@
 import { getSettings } from '../core/config'
 import { LIMITS } from '../core/constants'
 import { pageUrlMid } from '../core/midResolver'
-import { rememberNick, setDiagnostic, type SceneDiagnostic } from '../core/runtime'
+import { rememberFace, rememberNick, setDiagnostic, type SceneDiagnostic } from '../core/runtime'
 import { store } from '../core/store'
 import type { SceneKey, UserRecord } from '../core/types'
 import { formatDay } from '../util/format'
-import { h, qs, qsa } from '../util/dom'
+import { h, qs, qsa, queryDeepAll } from '../util/dom'
 import { log, warn } from '../util/log'
 import { luminanceOf, readableOn } from '../core/env'
 import { openEditor } from '../ui/editor'
 import { toast } from '../ui/toast'
 
-/** 宿主选择器：新版空间页右侧黑色侧栏。改版时只动这里（实测记录见 tests/selectors.md） */
-const HOST_CANDIDATES = ['.aside']
+/** 宿主选择器：主页右侧栏 .aside / 动态页右栏 .space-dynamic__right。改版时只动这里（实测记录见 tests/selectors.md） */
+const HOST_CANDIDATES = ['.aside', '.space-dynamic__right']
 
 const CARD_ID = 'brmk-space-card'
 const SCENE: SceneKey = 'space'
@@ -54,11 +54,20 @@ export function spaceMid(): string | null {
   return pageUrlMid()
 }
 
-/** 空间页标题形如「余音度半的个人空间-…」，取前段作昵称快照 */
+/** 空间页标题形如「XX的个人空间-…」（主页）或「XX个人动态-…」（动态页），取前段作昵称快照 */
 function titleNickname(): string {
   const title = document.title || ''
-  const m = /^(.+?)的个人空间/.exec(title)
+  const m = /^(.+?)(?:的个人空间|个人动态)/.exec(title)
   return m ? m[1].trim().slice(0, 100) : ''
+}
+
+/** 侧栏用户卡的真实头像（bili-avatar 的 shadow img），取不到返回空串 */
+function avatarFaceOf(host: Element): string {
+  for (const img of queryDeepAll(host, 'img', { maxDepth: 4, limit: 10 })) {
+    const src = img.getAttribute('src') ?? img.getAttribute('data-src') ?? ''
+    if (src.includes('/bfs/face/')) return src
+  }
+  return ''
 }
 
 function findHost(): { host: Element | null; hits: { selector: string; hits: number }[] } {
@@ -135,6 +144,8 @@ function destroy(): void {
 function mount(host: Element, mid: string): HTMLElement {
   const nickname = titleNickname()
   if (nickname) rememberNick(mid, nickname)
+  const face = avatarFaceOf(host)
+  if (face) rememberFace(mid, face)
 
   const el = h('div', 'brmk-space-card')
   el.id = CARD_ID
@@ -415,7 +426,7 @@ export function scanSpaceAside(): SceneDiagnostic {
   }
   if (!host) {
     destroy()
-    diag.notes.push('未找到 .aside 侧栏（可能未登录、页面未渲染完或已改版）')
+    diag.notes.push('未找到右侧栏 .aside / .space-dynamic__right（可能未登录、页面未渲染完或已改版）')
     setDiagnostic(diag)
     return diag
   }

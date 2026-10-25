@@ -1,5 +1,6 @@
 import { LIMITS, TAG_PRESET_COLORS } from '../core/constants'
 import { getSettings } from '../core/config'
+import { faceOf } from '../core/runtime'
 import { store } from '../core/store'
 import type { SceneKey, UserRecord } from '../core/types'
 import { h, truncate } from '../util/dom'
@@ -252,7 +253,8 @@ export function openEditor(options: EditorOptions = {}): void {
         color,
         note,
         nickSnapshot: options.nickname ?? record?.nickSnapshot ?? '',
-        faceSnapshot: options.face ?? record?.faceSnapshot ?? '',
+        // 页面上刚解析到的头像优先（faceCache），其次打开时的记录快照
+        faceSnapshot: options.face ?? faceOf(finalMid) ?? record?.faceSnapshot ?? '',
       },
       { scene: options.scene ?? 'manual', url: location.href },
     )

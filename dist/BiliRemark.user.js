@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliRemark
 // @namespace    https://github.com/YoinSama/BiliRemark
-// @version      1.0.2
+// @version      1.6.1
 // @author       Yoin
 // @description  B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。
 // @license      MIT
@@ -13,12 +13,14 @@
 // @match        https://live.bilibili.com/*
 // @match        https://message.bilibili.com/*
 // @match        https://search.bilibili.com/*
+// @connect      api.bilibili.com
 // @grant        GM_addValueChangeListener
 // @grant        GM_getValue
 // @grant        GM_info
 // @grant        GM_registerMenuCommand
 // @grant        GM_setClipboard
 // @grant        GM_setValue
+// @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @run-at       document-idle
 // ==/UserScript==
@@ -47,10 +49,10 @@
 			comment: true,
 			space: true,
 			dynamic: true,
-			card: false,
+			card: true,
 			live: false,
-			relation: false,
-			message: false
+			relation: true,
+			message: true
 		},
 		display: {
 			position: "afterName",
@@ -158,6 +160,17 @@
 		const r = raw;
 		base.enabled = bool(r.enabled, base.enabled);
 		if (r.scenes && typeof r.scenes === "object") for (const key of Object.keys(base.scenes)) base.scenes[key] = bool(r.scenes[key], base.scenes[key]);
+		const MIGRATION_SCENE_DEFAULTS = "sceneDefaults20261025";
+		const storedMigrations = r.migrations && typeof r.migrations === "object" ? r.migrations : {};
+		if (!storedMigrations[MIGRATION_SCENE_DEFAULTS]) {
+			base.scenes.relation = DEFAULT_SETTINGS.scenes.relation;
+			base.scenes.message = DEFAULT_SETTINGS.scenes.message;
+			base.scenes.live = DEFAULT_SETTINGS.scenes.live;
+		}
+		base.migrations = {
+			...storedMigrations,
+			[MIGRATION_SCENE_DEFAULTS]: true
+		};
 		if (r.display && typeof r.display === "object") {
 			const d = r.display;
 			base.display.position = "afterName";
@@ -363,6 +376,16 @@
 			return null;
 		}
 	}
+	function pageState() {
+		const w = pageWindow();
+		if (!w) return null;
+		try {
+			const s = w.__INITIAL_STATE__;
+			return s && typeof s === "object" ? s : null;
+		} catch {
+			return null;
+		}
+	}
 	function pickMid(value) {
 		if (typeof value === "number") {
 			const s = String(value);
@@ -417,6 +440,21 @@
 		const nick = (nickname || "").trim();
 		if (!mid || !nick) return;
 		if (!nickCache.has(mid)) nickCache.set(mid, nick);
+	}
+	var faceCache = new Map();
+	function rememberFace(mid, face) {
+		const url = (face || "").trim();
+		if (!mid || !url) return;
+		if (!faceCache.has(mid)) {
+			faceCache.set(mid, url);
+			emit("face-seen", {
+				mid,
+				url
+			});
+		}
+	}
+	function faceOf(mid) {
+		return faceCache.get(mid);
 	}
 	var diagnostics = new Map();
 	function setDiagnostic(diag) {
@@ -658,6 +696,26 @@
 				mids: [merged.mid]
 			});
 			return merged;
+		}
+		patchFaces(faces) {
+			const patched = [];
+			for (const [mid, face] of faces) {
+				const url = String(face ?? "").trim();
+				if (!/^https?:\/\//.test(url)) continue;
+				const rec = this.data.users[mid];
+				if (!rec || rec.faceSnapshot) continue;
+				rec.faceSnapshot = url.slice(0, 500);
+				patched.push(mid);
+			}
+			if (!patched.length) return [];
+			this.data.updatedAt = now();
+			this.dirty = true;
+			this.persistSoon();
+			emit("data-changed", {
+				reason: "patch-faces",
+				mids: patched
+			});
+			return patched;
 		}
 		remove(mid) {
 			const rec = this.data.users[mid];
@@ -1107,7 +1165,7 @@
 				color,
 				note,
 				nickSnapshot: options.nickname ?? record?.nickSnapshot ?? "",
-				faceSnapshot: options.face ?? record?.faceSnapshot ?? ""
+				faceSnapshot: options.face ?? faceOf(finalMid) ?? record?.faceSnapshot ?? ""
 			}, {
 				scene: options.scene ?? "manual",
 				url: location.href
@@ -1178,6 +1236,7 @@
 	var byAnchor = new Map();
 	var byEl = new WeakMap();
 	var lastPos = new WeakMap();
+	var docRect = new WeakMap();
 	var layer = null;
 	var rafId = 0;
 	var pollTimer = null;
@@ -1198,10 +1257,32 @@
 	function onViewportChange() {
 		schedule();
 	}
+	function onScroll(ev) {
+		const t = ev.target;
+		if (!t || t === document || t === document.documentElement) {
+			refreshVisibility();
+			return;
+		}
+		schedule();
+	}
+	function refreshVisibility() {
+		const sx = window.scrollX;
+		const sy = window.scrollY;
+		const vw = document.documentElement.clientWidth || window.innerWidth;
+		const vh = window.innerHeight;
+		for (const slots of byAnchor.values()) for (const slot of SLOTS) {
+			const el = slots[slot];
+			if (!el || !el.isConnected) continue;
+			const c = docRect.get(el);
+			if (!c || !c.ok) continue;
+			if (c.y + c.h < sy - 8 || c.y > sy + vh + 8 || c.x + c.w < sx - 8 || c.x > sx + vw + 8) hide(el);
+			else show(el);
+		}
+	}
 	function bind$1() {
 		if (bound) return;
 		bound = true;
-		window.addEventListener("scroll", onViewportChange, {
+		window.addEventListener("scroll", onScroll, {
 			passive: true,
 			capture: true
 		});
@@ -1265,14 +1346,28 @@
 		}
 		return right;
 	}
-	function place(anchor, el, vw, vh) {
+	function place(anchor, el, vw, vh, lrx, lry) {
 		const r = anchor.getBoundingClientRect();
 		if (!r.width && !r.height) {
 			hide(el);
+			docRect.set(el, {
+				x: 0,
+				y: 0,
+				w: 0,
+				h: 0,
+				ok: false
+			});
 			return;
 		}
 		if (r.bottom < -8 || r.top > vh + 8 || r.right < -8 || r.left > vw + 8) {
 			hide(el);
+			docRect.set(el, {
+				x: 0,
+				y: 0,
+				w: 0,
+				h: 0,
+				ok: false
+			});
 			return;
 		}
 		el.removeAttribute("data-brmk-tight");
@@ -1294,7 +1389,15 @@
 		let y;
 		let maxW;
 		let fits = true;
-		if (limitRight - rightX >= need && !blockedBySibling(anchor, rightX, centeredY, naturalW, h)) {
+		if (el.getAttribute("data-brmk-place") === "below" && !!pr) {
+			x = Math.max(MARGIN, Math.round(r.left));
+			y = Math.round(r.bottom + 2);
+			maxW = Math.round(pr.right - 2) - x;
+			if (maxW < need) {
+				fits = false;
+				maxW = Math.max(need, vw - 8 - x);
+			}
+		} else if (limitRight - rightX >= need && !blockedBySibling(anchor, rightX, centeredY, naturalW, h)) {
 			x = rightX;
 			y = centeredY;
 			maxW = limitRight - x;
@@ -1329,11 +1432,20 @@
 			x = Math.max(MARGIN, x);
 			y = clamp(y, MARGIN, vh - 8 - h);
 		}
-		const sig = `${x},${y},${width}`;
+		const docX = x + window.scrollX;
+		const docY = y + window.scrollY;
+		const sig = `${docX},${docY},${width}`;
 		if (lastPos.get(el) !== sig) {
-			el.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+			el.style.translate = `${x - lrx}px ${y - lry}px`;
 			lastPos.set(el, sig);
 		}
+		docRect.set(el, {
+			x: docX,
+			y: docY,
+			w: width,
+			h,
+			ok: true
+		});
 		show(el);
 	}
 	function sync() {
@@ -1343,6 +1455,9 @@
 		}
 		const vw = document.documentElement.clientWidth || window.innerWidth;
 		const vh = window.innerHeight;
+		const lr = layer?.getBoundingClientRect();
+		const lrx = lr ? lr.left : 0;
+		const lry = lr ? lr.top : 0;
 		const dead = [];
 		for (const [anchor, slots] of byAnchor) {
 			if (!anchor.isConnected) {
@@ -1357,7 +1472,7 @@
 					byEl.delete(el);
 					continue;
 				}
-				place(anchor, el, vw, vh);
+				place(anchor, el, vw, vh, lrx, lry);
 			}
 		}
 		for (const anchor of dead) dropAnchor(anchor);
@@ -1438,17 +1553,6 @@
 			}
 		}
 		byAnchor.delete(anchor);
-	}
-	function clearSlot(slot) {
-		for (const [anchor, slots] of Array.from(byAnchor)) {
-			const el = slots[slot];
-			if (!el) continue;
-			byEl.delete(el);
-			el.remove();
-			slots[slot] = null;
-			if (!slots.badge && !slots.pencil) byAnchor.delete(anchor);
-		}
-		stopPollIfEmpty();
 	}
 	function clear() {
 		for (const anchor of Array.from(byAnchor.keys())) dropAnchor(anchor);
@@ -1653,28 +1757,37 @@
 		return `
 /* ===== BiliRemark 样式（全部 brmk- 前缀，不覆盖页面既有样式） ===== */
 /* 页面内浮层：徽标 / 铅笔都挂在这里，绝不进入 B 站自己的容器 */
+/* 页面内浮层：徽标 / 铅笔都挂在这里，绝不进入 B 站自己的容器。
+   层钉在文档原点（absolute 而非 fixed），徽标按文档坐标定位 —— 主文档滚动时
+   徽标与页面内容同帧移动，不需要 JS 追帧重算（那会慢一帧，看起来在飘）。
+   width:100% 不能省：徽标 max-width 里的 100% 和 shrink-to-fit 都按包含块解析，
+   层宽为 0 会把徽标塌缩成一个点。height:0 不参与布局，仅作定位原点。 */
 #brmk-layer{
-  position:fixed; left:0; top:0; width:100%; height:100%;
+  position:absolute; left:0; top:0; width:100%; height:0;
   z-index:99997; pointer-events:none; overflow:visible;
   contain:layout style;
 }
+/* portal 用 translate 属性定位（不用 transform，避免被 .brmk-badge 的 transform 过渡拖成飞入/弹跳） */
 #brmk-layer>.brmk-badge,#brmk-layer>.brmk-pencil{
   position:absolute; left:0; top:0; margin:0; pointer-events:auto;
-  will-change:transform; transform:translate3d(0,0,0);
+  will-change:translate;
 }
 .brmk-badge{
   display:inline-flex; align-items:center; gap:4px;
   margin:0; padding:0 7px; height:18px; max-width:min(240px, 100%);
   border-radius:9px; vertical-align:middle;
+  /* 内联挂法（评论区夹在昵称和等级之间）：flex 组里垂直居中、不被压缩 */
+  align-self:center; flex:none;
   font-family:${FONT_STACK}; font-size:12px; font-weight:500; line-height:16px;
   letter-spacing:0; white-space:nowrap; cursor:pointer; user-select:none;
   color:var(--brmk-c, ${p.accent});
-  background:color-mix(in srgb, var(--brmk-c, ${p.accent}) 12%, transparent);
+  /* 不透明底：浮层徽标会盖在页面文字上，透底会显得到处叠字 */
+  background:color-mix(in srgb, var(--brmk-c, ${p.accent}) 14%, ${p.bg});
   border:1px solid color-mix(in srgb, var(--brmk-c, ${p.accent}) 38%, transparent);
   transition:background .12s ease, transform .12s ease;
 }
 .brmk-badge:hover{
-  background:color-mix(in srgb, var(--brmk-c, ${p.accent}) 22%, transparent);
+  background:color-mix(in srgb, var(--brmk-c, ${p.accent}) 24%, ${p.bg});
 }
 .brmk-badge:active{ transform:scale(.97); }
 .brmk-badge.brmk-hover-only{ opacity:0; }
@@ -1697,6 +1810,18 @@
 /* 浮层给的空间不够时（portal 打的标记），先让位给备注名，标签胶囊收起 */
 .brmk-badge[data-brmk-tight] .brmk-tags{ display:none; }
 .brmk-badge[data-brmk-tight] .brmk-name{ max-width:100%; }
+/* 内联挂法（评论区夹在昵称和等级之间）：边距对齐原生昵称行节奏 ——
+   真机实测等级图标 margin-left 5px，徽标跟它同节奏；右侧不另加，
+   让后面元素（等级图标）自带的 5px 左边距生效 */
+.brmk-badge.brmk-inline{ margin:0 0 0 5px; }
+/* 内联徽标随评论淡入（160ms），避免加载完成后成批突现 */
+.brmk-badge.brmk-inline{ animation:brmk-badge-in .16s ease-out; }
+@keyframes brmk-badge-in{ from{ opacity:0 } }
+
+/* S5 视频页右栏三行布局：备注行作为卡片 .info 内的一行（.upname 与 .playinfo 之间）。
+   进入文档流前先隐藏，插入后靠这个类显现（替代浮层的定位职责） */
+.brmk-card-badge-row{ margin:3px 0 0; line-height:1.6; }
+.brmk-card-badge-row .brmk-badge{ max-width:100%; animation:brmk-badge-in .16s ease-out; }
 
 .brmk-pencil{
   display:inline-flex; align-items:center; justify-content:center;
@@ -2056,6 +2181,7 @@
 @media (prefers-reduced-motion: reduce){
   #brmk-editor,#brmk-manager,#brmk-manager .brmk-panel,#brmk-toast .brmk-toast-item{ animation:none !important; }
   .brmk-badge,.brmk-pencil,.brmk-switch,.brmk-switch::after{ transition:none !important; }
+  .brmk-badge.brmk-inline{ animation:none !important; }
 }
 `.trim();
 	}
@@ -2156,6 +2282,7 @@
 		const badge = h("span", "brmk-badge");
 		badge.setAttribute("role", "button");
 		badge.tabIndex = 0;
+		if (options.placeBelow) badge.setAttribute("data-brmk-place", "below");
 		badge.addEventListener("click", (ev) => {
 			ev.preventDefault();
 			ev.stopPropagation();
@@ -2189,10 +2316,13 @@
 			badge = createBadge(record.mid, options);
 			attach(anchor, "badge", badge);
 		}
-		badge.setAttribute("data-brmk-mid", record.mid);
-		badge.style.setProperty("--brmk-c", record.color ?? getTheme().color);
-		badge.classList.toggle("brmk-hover-only", !!options.showOnHoverOnly);
-		const signature = [
+		paintBadge(badge, record, options);
+		detach(anchor, "pencil");
+		refresh();
+		return badge;
+	}
+	function badgeSignature(record, options) {
+		return [
 			record.remark,
 			record.tags.join(""),
 			record.color ?? "",
@@ -2204,16 +2334,53 @@
 			options.showOnHoverOnly ? 1 : 0,
 			getTheme().color
 		].join("");
+	}
+	function paintBadge(badge, record, options) {
+		badge.setAttribute("data-brmk-mid", record.mid);
+		badge.style.setProperty("--brmk-c", record.color ?? getTheme().color);
+		badge.classList.toggle("brmk-hover-only", !!options.showOnHoverOnly);
+		const signature = badgeSignature(record, options);
 		if (badge.dataset.brmkSig !== signature) {
 			buildBadgeContent(badge, record, options);
 			badge.dataset.brmkSig = signature;
 		}
-		detach(anchor, "pencil");
-		refresh();
+	}
+	function buildBadgeElement(record, options) {
+		const badge = createBadge(record.mid, options);
+		paintBadge(badge, record, options);
+		return badge;
+	}
+	var inlineBadges = new Set();
+	function renderInlineBadge(reference, record, options) {
+		if (!record.remark && !record.tags.length) {
+			removeBadge(record.mid);
+			return null;
+		}
+		const parent = reference.parentElement;
+		if (!parent || !reference.isConnected) return null;
+		const root = reference.getRootNode();
+		if (root instanceof ShadowRoot) ensureShadowStyle(root);
+		let badge = parent.querySelector(":scope > .brmk-badge");
+		if (badge && badge.getAttribute("data-brmk-mid") !== record.mid) {
+			badge.remove();
+			inlineBadges.delete(badge);
+			badge = null;
+		}
+		if (!badge) {
+			badge = createBadge(record.mid, options);
+			badge.classList.add("brmk-inline");
+			inlineBadges.add(badge);
+		}
+		if (badge.previousElementSibling !== reference) reference.after(badge);
+		paintBadge(badge, record, options);
 		return badge;
 	}
 	function removeBadge(mid) {
 		for (const el of list("badge")) if (el.getAttribute("data-brmk-mid") === mid) removeEl(el);
+		for (const el of inlineBadges) if (el.getAttribute("data-brmk-mid") === mid) {
+			el.remove();
+			inlineBadges.delete(el);
+		}
 	}
 	function showPencil(anchor) {
 		const timer = hideTimers.get(anchor);
@@ -2282,12 +2449,32 @@
 			const rec = store.get(mid);
 			if (!rec || !rec.remark && !rec.tags.length) removeEl(el);
 		}
+		for (const el of inlineBadges) {
+			if (!el.isConnected) {
+				inlineBadges.delete(el);
+				continue;
+			}
+			const mid = el.getAttribute("data-brmk-mid") ?? "";
+			const rec = store.get(mid);
+			if (!rec || !rec.remark && !rec.tags.length) {
+				el.remove();
+				inlineBadges.delete(el);
+			}
+		}
+	}
+	function clearPencilsOfScene(scene) {
+		for (const el of list("pencil")) if (pencilMeta.get(el)?.scene === scene) removeEl(el);
 	}
 	function badgeCount() {
-		return count("badge");
+		let count$1 = count("badge");
+		for (const el of inlineBadges) if (el.isConnected) count$1++;
+		else inlineBadges.delete(el);
+		return count$1;
 	}
 	function clearAll() {
 		clear();
+		for (const el of inlineBadges) el.remove();
+		inlineBadges.clear();
 	}
 	function badgeOptions() {
 		const s = getSettings().display;
@@ -2297,6 +2484,443 @@
 			maxTags: s.maxTags,
 			showOnHoverOnly: s.showOnHoverOnly
 		};
+	}
+	var HOST = "bili-comments";
+	var USER_INFO = "bili-comment-user-info";
+	var MID_LINK = "a[href*=\"space.bilibili.com/\"]";
+	var RENDERERS = "bili-comment-renderer, bili-comment-reply-renderer";
+	var MAX_ANCHORS = 300;
+	function hasCommentHost() {
+		return !!qs(HOST);
+	}
+	function faceOfComment(renderer) {
+		if (!renderer) return "";
+		for (const img of queryDeepAll(renderer.shadowRoot ?? renderer, "img", {
+			maxDepth: 6,
+			limit: 20
+		})) {
+			const src = img.getAttribute("src") ?? img.getAttribute("data-src") ?? "";
+			if (src.includes("/bfs/face/")) return src;
+		}
+		return "";
+	}
+	function pickTargets$5() {
+		const hosts = qsa(HOST);
+		const hits = [{
+			selector: HOST,
+			hits: hosts.length
+		}];
+		const targets = [];
+		let userInfoHits = 0;
+		for (const host of hosts) {
+			const users = queryDeepAll(host.shadowRoot ?? host, USER_INFO, {
+				maxDepth: 12,
+				limit: MAX_ANCHORS
+			});
+			userInfoHits += users.length;
+			for (const ui of users) {
+				if (targets.length >= MAX_ANCHORS) break;
+				const sr = ui.shadowRoot;
+				if (!sr) continue;
+				const mid = midFromHref(sr.querySelector(MID_LINK)?.getAttribute("href") ?? null);
+				if (!mid) continue;
+				const nameEl = sr.querySelector("#user-name");
+				const nickname = (nameEl?.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 100);
+				const anchor = nameEl?.parentElement ?? nameEl ?? ui;
+				const badgeAnchor = nameEl ?? void 0;
+				const renderer = closestDeep(ui, RENDERERS);
+				targets.push({
+					anchor,
+					badgeAnchor,
+					mid,
+					nickname,
+					face: faceOfComment(renderer)
+				});
+			}
+		}
+		hits.push({
+			selector: USER_INFO,
+			hits: userInfoHits
+		});
+		return {
+			targets,
+			hits
+		};
+	}
+	function inject$5(targets) {
+		const opts = {
+			...badgeOptions(),
+			scene: "comment",
+			showTags: false
+		};
+		let injected = 0;
+		for (const target of targets) {
+			if (!target.anchor.isConnected) continue;
+			rememberNick(target.mid, target.nickname);
+			if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face);
+			const record = store.get(target.mid);
+			if (record) {
+				let ok = null;
+				if (target.badgeAnchor) {
+					ok = renderInlineBadge(target.badgeAnchor, record, opts);
+					detach(target.anchor, "pencil");
+				} else ok = renderBadge(target.anchor, record, opts);
+				if (ok) injected++;
+			} else ensurePencil(target.anchor, target.mid, target.nickname, "comment");
+		}
+		return injected;
+	}
+	var batchToken = 0;
+	var hostObserver = null;
+	var hostObserved = null;
+	var hostScanTimer = null;
+	function watchHost() {
+		const root = qs(HOST)?.shadowRoot;
+		if (!root) return;
+		if (hostObserved === root) return;
+		unwatchHost();
+		hostObserved = root;
+		hostObserver = new MutationObserver(() => {
+			if (hostScanTimer !== null) return;
+			hostScanTimer = window.setTimeout(() => {
+				hostScanTimer = null;
+				const settings = getSettings();
+				if (settings.enabled && settings.scenes.comment) scanComments();
+			}, 50);
+		});
+		hostObserver.observe(root, {
+			childList: true,
+			subtree: true
+		});
+	}
+	function unwatchHost() {
+		hostObserver?.disconnect();
+		hostObserver = null;
+		hostObserved = null;
+		if (hostScanTimer !== null) {
+			window.clearTimeout(hostScanTimer);
+			hostScanTimer = null;
+		}
+	}
+	var retryToken = 0;
+	var retryCount = 0;
+	var RETRY_MAX = 20;
+	function scheduleRetryScan() {
+		if (retryCount >= RETRY_MAX) return;
+		retryCount++;
+		const token = ++retryToken;
+		window.setTimeout(() => {
+			if (token !== retryToken) return;
+			const settings = getSettings();
+			if (settings.enabled && settings.scenes.comment && hasCommentHost()) scanComments();
+		}, 250);
+	}
+	function scanComments() {
+		const token = ++batchToken;
+		watchHost();
+		const { targets, hits } = pickTargets$5();
+		const diag = {
+			scene: "comment",
+			label: "评论区",
+			selectors: hits,
+			midResolved: targets.length,
+			injected: 0,
+			notes: []
+		};
+		if (!targets.length) {
+			diag.notes.push("评论区组件存在但未解析到评论者（可能尚未加载完或结构已变）");
+			setDiagnostic(diag);
+			scheduleRetryScan();
+			return;
+		}
+		retryCount = 0;
+		setDiagnostic(diag);
+		const size = Math.max(1, getSettings().advanced.maxNodesPerTick);
+		let index = 0;
+		let injected = 0;
+		const step = () => {
+			if (token !== batchToken) return;
+			const settings = getSettings();
+			if (!settings.enabled || !settings.scenes.comment) return;
+			const slice = targets.slice(index, index + size);
+			index += slice.length;
+			injected += inject$5(slice);
+			if (index < targets.length) window.setTimeout(step, 0);
+			else {
+				diag.injected = injected;
+				setDiagnostic(diag);
+			}
+		};
+		step();
+	}
+	function cancelCommentBatch() {
+		batchToken++;
+		retryToken++;
+		unwatchHost();
+	}
+	function clearCommentPencils() {
+		cancelCommentBatch();
+		clearPencilsOfScene("comment");
+	}
+	var CANDIDATES$1 = ["a.bili-video-card__info--owner", ".video-page-card-small .upname a[href*=\"space.bilibili.com/\"]"];
+	function hasCardHost() {
+		return !!qs(".bili-video-card, .video-page-card-small .upname");
+	}
+	var SIDE_ITEM = ".video-page-card-small";
+	var ROW_MIN_AGE_MS = 3e3;
+	var rowFirstSeen = new WeakMap();
+	function isSidebarAnchor(anchor) {
+		return !!anchor.closest(SIDE_ITEM);
+	}
+	function ensureSidebarRow(anchor, record, options) {
+		const upname = anchor.closest(".upname");
+		const info = upname?.parentElement;
+		if (!upname || !info) return;
+		if (!record.remark && !record.tags.length) {
+			info.querySelector(":scope > .brmk-card-badge-row")?.remove();
+			return;
+		}
+		const now = Date.now();
+		const born = rowFirstSeen.get(upname);
+		if (born === void 0) {
+			rowFirstSeen.set(upname, now);
+			return;
+		}
+		if (now - born < ROW_MIN_AGE_MS) return;
+		const play = info.querySelector(".playinfo");
+		if (!play || !play.textContent?.trim()) return;
+		const sig = badgeSignature(record, options);
+		const existing = info.querySelector(":scope > .brmk-card-badge-row");
+		if (!existing) {
+			const row = h("div", "brmk-card-badge-row");
+			row.appendChild(buildBadgeElement(record, options));
+			const next = upname.nextElementSibling;
+			try {
+				info.insertBefore(row, next);
+			} catch {
+				row.remove();
+				return;
+			}
+		} else if (existing.firstElementChild?.getAttribute("data-brmk-sig") !== sig) {
+			const fresh = buildBadgeElement(record, options);
+			const old = existing.firstElementChild;
+			if (old) existing.replaceChild(fresh, old);
+			else existing.appendChild(fresh);
+		}
+	}
+	function pruneSidebarRows() {
+		for (const row of qsa(".brmk-card-badge-row")) {
+			const rec = store.get(row.getAttribute("data-brmk-mid") ?? "");
+			if (!rec || !rec.remark && !rec.tags.length) row.remove();
+		}
+	}
+	function clearSidebarRows() {
+		for (const row of qsa(".brmk-card-badge-row")) row.remove();
+	}
+	function nicknameOf(anchor) {
+		return snapshotNickname(qs("span.bili-video-card__info--author, span.name", anchor) ?? anchor);
+	}
+	var lazyBound$2 = new WeakSet();
+	function bindLazyPencil$2(anchor, mid, nickname) {
+		if (lazyBound$2.has(anchor)) return;
+		lazyBound$2.add(anchor);
+		anchor.addEventListener("mouseenter", () => {
+			if (!anchor.isConnected) return;
+			ensurePencil(anchor, mid, nickname, "card");
+			showPencil(anchor);
+		});
+	}
+	function pickTargets$4() {
+		const hits = [];
+		const targets = [];
+		const seen = new Set();
+		for (let ci = 0; ci < CANDIDATES$1.length; ci++) {
+			const selector = CANDIDATES$1[ci];
+			const found = qsa(selector).filter((el) => isVisible(el) && !seen.has(el));
+			hits.push({
+				selector,
+				hits: found.length
+			});
+			for (const el of found) {
+				seen.add(el);
+				const resolved = resolveFromElement(el);
+				if (!resolved) continue;
+				if (targets.some((t) => t.mid === resolved.mid && (t.anchor.contains(el) || el.contains(t.anchor)))) continue;
+				targets.push({
+					anchor: el,
+					mid: resolved.mid,
+					nickname: nicknameOf(el),
+					below: ci === 0
+				});
+			}
+		}
+		return {
+			targets,
+			hits
+		};
+	}
+	function inject$4(targets) {
+		const opts = {
+			...badgeOptions(),
+			scene: "card"
+		};
+		let injected = 0;
+		for (const target of targets) {
+			if (!target.anchor.isConnected) continue;
+			rememberNick(target.mid, target.nickname);
+			const record = store.get(target.mid);
+			if (record) {
+				if (isSidebarAnchor(target.anchor)) {
+					ensureSidebarRow(target.anchor, record, opts);
+					injected++;
+				} else if (renderBadge(target.anchor, record, target.below ? {
+					...opts,
+					placeBelow: true
+				} : opts)) injected++;
+			} else bindLazyPencil$2(target.anchor, target.mid, target.nickname);
+		}
+		return injected;
+	}
+	function scanCards() {
+		const { targets, hits } = pickTargets$4();
+		let injected = 0;
+		if (getSettings().scenes.card && getSettings().enabled) {
+			pruneSidebarRows();
+			injected = inject$4(targets);
+		}
+		const diag = {
+			scene: "card",
+			label: "视频卡片",
+			selectors: hits,
+			midResolved: targets.length,
+			injected,
+			notes: []
+		};
+		if (!targets.length) diag.notes.push("未找到卡片 UP 主锚点（可能尚未水合、不是卡片页或结构已变）");
+		setDiagnostic(diag);
+		return diag;
+	}
+	function clearCardPencils() {
+		clearPencilsOfScene("card");
+		clearSidebarRows();
+	}
+	function clearCardInline() {
+		clearSidebarRows();
+	}
+	var AUTHOR_CANDIDATES = [".opus-module-author__name"];
+	function isDynamicPage() {
+		return /\/opus\//i.test(location.pathname) || location.hostname === "t.bilibili.com";
+	}
+	function midText(v) {
+		const s = String(v ?? "").trim();
+		return /^\d{1,20}$/.test(s) && s !== "0" ? s : null;
+	}
+	function authorFromState() {
+		const s = pageState();
+		if (!s) return null;
+		try {
+			const modules = s.detail?.modules;
+			if (!Array.isArray(modules)) return null;
+			const m = modules.find((x) => x?.module_type === "MODULE_TYPE_AUTHOR")?.module_author;
+			if (!m) return null;
+			const mid = midFromHref(typeof m.jump_url === "string" ? m.jump_url : null) ?? midText(m.mid);
+			if (!mid) return null;
+			return {
+				mid,
+				name: typeof m.name === "string" ? m.name : "",
+				face: typeof m.face === "string" ? m.face : ""
+			};
+		} catch {
+			return null;
+		}
+	}
+	function authorFromLink(container) {
+		const mid = midFromHref(qs("a[href*=\"space.bilibili.com/\"]", container)?.getAttribute("href") ?? null);
+		if (!mid) return null;
+		let face = "";
+		for (const img of qsa("img", container)) {
+			const src = img.getAttribute("src") ?? img.getAttribute("data-src") ?? "";
+			if (src.includes("/bfs/face/")) {
+				face = src;
+				break;
+			}
+		}
+		return {
+			mid,
+			face
+		};
+	}
+	function pickTargets$3() {
+		const hits = [];
+		const targets = [];
+		for (const selector of AUTHOR_CANDIDATES) {
+			const found = qsa(selector).filter((el) => isVisible(el));
+			hits.push({
+				selector,
+				hits: found.length
+			});
+			const anchor = found[0];
+			if (!anchor) continue;
+			const container = anchor.closest(".opus-module-author");
+			const state = authorFromState();
+			if (state) {
+				targets.push({
+					anchor,
+					mid: state.mid,
+					nickname: state.name || snapshotNickname(anchor),
+					face: state.face
+				});
+				break;
+			}
+			const viaLink = container ? authorFromLink(container) : null;
+			if (viaLink) targets.push({
+				anchor,
+				mid: viaLink.mid,
+				nickname: snapshotNickname(anchor),
+				face: viaLink.face
+			});
+			break;
+		}
+		return {
+			targets,
+			hits
+		};
+	}
+	function inject$3(targets) {
+		const opts = {
+			...badgeOptions(),
+			scene: "dynamic"
+		};
+		let injected = 0;
+		for (const target of targets) {
+			if (!target.anchor.isConnected) continue;
+			rememberNick(target.mid, target.nickname);
+			if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face);
+			const record = store.get(target.mid);
+			if (record) {
+				if (renderBadge(target.anchor, record, opts)) injected++;
+			} else ensurePencil(target.anchor, target.mid, target.nickname, "dynamic");
+		}
+		return injected;
+	}
+	function scanDynamic() {
+		const { targets, hits } = pickTargets$3();
+		let injected = 0;
+		if (getSettings().scenes.dynamic && getSettings().enabled) injected = inject$3(targets);
+		const diag = {
+			scene: "dynamic",
+			label: "动态页",
+			selectors: hits,
+			midResolved: targets.length,
+			injected,
+			notes: []
+		};
+		if (!targets.length) diag.notes.push("未找到动态作者锚点（可能尚未渲染完成、不是动态详情页或结构已变）");
+		setDiagnostic(diag);
+		return diag;
+	}
+	function clearDynamicPencils() {
+		clearPencilsOfScene("dynamic");
 	}
 	var SCOPES = [
 		"#v_upinfo",
@@ -2321,7 +2945,24 @@
 		for (const scope of SCOPES) if (el.closest(scope)) return true;
 		return false;
 	}
-	function pickTargets() {
+	var FACE_IMGS = [
+		"img[src*=\"/bfs/face/\"]",
+		"img[data-src*=\"/bfs/face/\"]",
+		".up-avatar-wrap img",
+		".up-avatar img",
+		".bili-avatar img"
+	];
+	function faceNear(el) {
+		const container = closestDeep(el, SCOPES.join(","));
+		if (!container) return "";
+		for (const selector of FACE_IMGS) {
+			const img = qs(selector, container);
+			const src = img?.getAttribute("src") ?? img?.getAttribute("data-src") ?? "";
+			if (src && !src.startsWith("data:")) return src;
+		}
+		return "";
+	}
+	function pickTargets$2() {
 		const hits = [];
 		const targets = [];
 		const seen = new Set();
@@ -2339,7 +2980,8 @@
 				targets.push({
 					anchor: el,
 					mid,
-					nickname: snapshotNickname(el) || (targets.length === 0 ? pageUpName() : "")
+					nickname: snapshotNickname(el) || (targets.length === 0 ? pageUpName() : ""),
+					face: faceNear(el)
 				});
 			}
 			if (targets.length) break;
@@ -2354,7 +2996,8 @@
 					targets.push({
 						anchor: link,
 						mid,
-						nickname: pageUpName() || snapshotNickname(link)
+						nickname: pageUpName() || snapshotNickname(link),
+						face: faceNear(link)
 					});
 					break;
 				}
@@ -2365,7 +3008,7 @@
 			hits
 		};
 	}
-	function inject(targets) {
+	function inject$2(targets) {
 		const settings = getSettings();
 		const opts = {
 			...badgeOptions(),
@@ -2375,6 +3018,7 @@
 		for (const target of targets) {
 			if (!target.anchor.isConnected) continue;
 			rememberNick(target.mid, target.nickname);
+			if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face);
 			const record = store.get(target.mid);
 			if (record) {
 				if (renderBadge(target.anchor, record, opts)) injected++;
@@ -2383,9 +3027,9 @@
 		return injected;
 	}
 	function scanVideoUp() {
-		const { targets, hits } = pickTargets();
+		const { targets, hits } = pickTargets$2();
 		let injected = 0;
-		if (getSettings().scenes.videoUp && getSettings().enabled) injected = inject(targets);
+		if (getSettings().scenes.videoUp && getSettings().enabled) injected = inject$2(targets);
 		const diag = {
 			scene: "videoUp",
 			label: "视频页 UP 主",
@@ -2399,9 +3043,249 @@
 		return diag;
 	}
 	function clearVideoUpPencils() {
-		clearSlot("pencil");
+		clearPencilsOfScene("videoUp");
 	}
-	var HOST_CANDIDATES = [".aside"];
+	var IM_HOST_RE = /(^|\.)message\.bilibili\.com$/i;
+	var FIXTURE_ATTR$2 = "data-brmk-im-fixture";
+	var MID_FROM_HASH_RE = /\/whisper\/mid(\d{1,20})/;
+	var ROW_CONTAINER_RE = /(?:^|\s)_SessionItem_[A-Za-z0-9]+_\d+/;
+	var ROW_SELECTOR = "[class*=\"SessionItem_\"]";
+	var NAME_SELECTOR = "[class*=\"SessionItem__Name\"]";
+	var TITLE_SELECTOR = "[class*=\"SessionItem__Title\"]";
+	var CONTACT_SELECTOR = "[class*=\"ContactName\"]";
+	function isImPage() {
+		if (document.documentElement.hasAttribute(FIXTURE_ATTR$2)) return !!document.getElementById("message-pc-app");
+		if (!IM_HOST_RE.test(location.hostname)) return false;
+		if (location.pathname !== "/") return false;
+		return !!qs("#app .message-layout") || !!document.getElementById("message-pc-app");
+	}
+	function isRowContainer(el) {
+		const cls = typeof el.className === "string" ? el.className : "";
+		return ROW_CONTAINER_RE.test(cls) && !cls.includes("SessionItem__");
+	}
+	function midFromRow(row) {
+		const dataId = row.getAttribute("data-id") ?? "";
+		const mid = /^contact_(\d{1,20})$/.exec(dataId)?.[1];
+		return mid && mid !== "0" ? mid : null;
+	}
+	function anchorOfRow(row) {
+		return qs(NAME_SELECTOR, row) ?? qs(TITLE_SELECTOR, row) ?? row;
+	}
+	function faceFromRow(row) {
+		return row.querySelector("img[src*=\"/bfs/face/\"]")?.getAttribute("src") ?? "";
+	}
+	function pickTargets$1() {
+		const rows = qsa(ROW_SELECTOR).filter((el) => isRowContainer(el) && isVisible(el));
+		const contacts = qsa(CONTACT_SELECTOR).filter((el) => isVisible(el));
+		const hits = [
+			{
+				selector: ROW_SELECTOR,
+				hits: rows.length
+			},
+			{
+				selector: NAME_SELECTOR,
+				hits: qsa(NAME_SELECTOR).length
+			},
+			{
+				selector: CONTACT_SELECTOR,
+				hits: contacts.length
+			}
+		];
+		const targets = [];
+		for (const row of rows) {
+			const mid = midFromRow(row);
+			if (!mid) continue;
+			const anchor = anchorOfRow(row);
+			if (targets.some((t) => t.mid === mid && (t.anchor.contains(anchor) || anchor.contains(t.anchor)))) continue;
+			targets.push({
+				anchor,
+				mid,
+				nickname: snapshotNickname(anchor),
+				face: faceFromRow(row),
+				lazy: true
+			});
+		}
+		const hashMid = MID_FROM_HASH_RE.exec(location.hash)?.[1];
+		if (hashMid && hashMid !== "0" && contacts.length) {
+			const anchor = contacts[0];
+			if (!targets.some((t) => t.mid === hashMid && (t.anchor.contains(anchor) || anchor.contains(t.anchor)))) targets.push({
+				anchor,
+				mid: hashMid,
+				nickname: snapshotNickname(anchor),
+				face: "",
+				lazy: false
+			});
+		}
+		for (const row of rows) {
+			if (midFromRow(row)) continue;
+			const resolved = resolveFromElement(anchorOfRow(row));
+			if (resolved && !targets.some((t) => t.mid === resolved.mid)) {
+				const anchor = anchorOfRow(row);
+				targets.push({
+					anchor,
+					mid: resolved.mid,
+					nickname: snapshotNickname(anchor),
+					face: faceFromRow(row),
+					lazy: true
+				});
+			}
+		}
+		return {
+			targets,
+			hits
+		};
+	}
+	var lazyBound$1 = new WeakSet();
+	function bindLazyPencil$1(anchor, mid, nickname) {
+		if (lazyBound$1.has(anchor)) return;
+		lazyBound$1.add(anchor);
+		anchor.addEventListener("mouseenter", () => {
+			if (!anchor.isConnected) return;
+			ensurePencil(anchor, mid, nickname, "message");
+			showPencil(anchor);
+		});
+	}
+	function inject$1(targets) {
+		const opts = {
+			...badgeOptions(),
+			scene: "message"
+		};
+		let injected = 0;
+		for (const target of targets) {
+			if (!target.anchor.isConnected) continue;
+			rememberNick(target.mid, target.nickname);
+			if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face);
+			const record = store.get(target.mid);
+			if (record) {
+				if (renderBadge(target.anchor, record, opts)) injected++;
+			} else if (target.lazy) bindLazyPencil$1(target.anchor, target.mid, target.nickname);
+			else ensurePencil(target.anchor, target.mid, target.nickname, "message");
+		}
+		return injected;
+	}
+	function scanIm() {
+		const { targets, hits } = pickTargets$1();
+		let injected = 0;
+		if (getSettings().scenes.message && getSettings().enabled) injected = inject$1(targets);
+		const diag = {
+			scene: "message",
+			label: "私信",
+			selectors: hits,
+			midResolved: targets.length,
+			injected,
+			notes: []
+		};
+		if (!targets.length) diag.notes.push("未找到会话行/联系人锚点（列表为空、未打开会话、结构已变或行 data-id 非 contact_ 前缀）");
+		setDiagnostic(diag);
+		return diag;
+	}
+	function clearImPencils() {
+		clearPencilsOfScene("message");
+	}
+	var SPACE_HOST_RE$1 = /(^|\.)space\.bilibili\.com$/i;
+	var FIXTURE_ATTR$1 = "data-brmk-relation-fixture";
+	var RELATION_PATH_RE = /^\/\d{1,20}\/relation\/(?:fans|follow)\/?$/;
+	var UNAME_SELECTOR = ".relation-content .items a.relation-card-info__uname";
+	var CARD_LINK_SELECTOR = ".relation-content .items .relation-card a[href*=\"space.bilibili.com/\"]";
+	function isRelationPage() {
+		if (!document.documentElement.hasAttribute(FIXTURE_ATTR$1) && !SPACE_HOST_RE$1.test(location.hostname)) return false;
+		if (!RELATION_PATH_RE.test(location.pathname)) return false;
+		return !!qs("main.route_relationFans, main.route_relationFollow");
+	}
+	function faceFromCard(anchor) {
+		return (anchor.closest(".relation-card") ?? anchor.closest(".items"))?.querySelector("img[src*=\"/bfs/face/\"]")?.getAttribute("src") ?? "";
+	}
+	function pickTargets() {
+		const unames = qsa(UNAME_SELECTOR).filter((el) => isVisible(el));
+		const cardLinks = qsa(CARD_LINK_SELECTOR).filter((el) => isVisible(el));
+		const hits = [{
+			selector: UNAME_SELECTOR,
+			hits: unames.length
+		}, {
+			selector: CARD_LINK_SELECTOR,
+			hits: cardLinks.length
+		}];
+		const targets = [];
+		const cardOf = (el) => el.closest(".relation-card");
+		const doneCards = new Set();
+		for (const anchor of unames) {
+			const resolved = resolveFromElement(anchor, { allowDescendant: false });
+			if (!resolved) continue;
+			const card = cardOf(anchor);
+			if (card && doneCards.has(card)) continue;
+			if (card) doneCards.add(card);
+			targets.push({
+				anchor,
+				mid: resolved.mid,
+				nickname: snapshotNickname(anchor),
+				face: faceFromCard(anchor)
+			});
+		}
+		for (const link of cardLinks) {
+			const card = cardOf(link);
+			if (card && doneCards.has(card)) continue;
+			const resolved = resolveFromElement(link, { allowDescendant: false });
+			if (!resolved) continue;
+			if (card) doneCards.add(card);
+			targets.push({
+				anchor: link,
+				mid: resolved.mid,
+				nickname: snapshotNickname(link),
+				face: faceFromCard(link)
+			});
+		}
+		return {
+			targets,
+			hits
+		};
+	}
+	var lazyBound = new WeakSet();
+	function bindLazyPencil(anchor, mid, nickname) {
+		if (lazyBound.has(anchor)) return;
+		lazyBound.add(anchor);
+		anchor.addEventListener("mouseenter", () => {
+			if (!anchor.isConnected) return;
+			ensurePencil(anchor, mid, nickname, "relation");
+			showPencil(anchor);
+		});
+	}
+	function inject(targets) {
+		const opts = {
+			...badgeOptions(),
+			scene: "relation"
+		};
+		let injected = 0;
+		for (const target of targets) {
+			if (!target.anchor.isConnected) continue;
+			rememberNick(target.mid, target.nickname);
+			if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face);
+			const record = store.get(target.mid);
+			if (record) {
+				if (renderBadge(target.anchor, record, opts)) injected++;
+			} else bindLazyPencil(target.anchor, target.mid, target.nickname);
+		}
+		return injected;
+	}
+	function scanRelation() {
+		const { targets, hits } = pickTargets();
+		let injected = 0;
+		if (getSettings().scenes.relation && getSettings().enabled) injected = inject(targets);
+		const diag = {
+			scene: "relation",
+			label: "粉丝/关注",
+			selectors: hits,
+			midResolved: targets.length,
+			injected,
+			notes: []
+		};
+		if (!targets.length) diag.notes.push("未找到关系列表行（未登录登录墙 / 列表为空 / 非卡片壳或结构已变）");
+		setDiagnostic(diag);
+		return diag;
+	}
+	function clearRelationPencils() {
+		clearPencilsOfScene("relation");
+	}
+	var HOST_CANDIDATES = [".aside", ".space-dynamic__right"];
 	var CARD_ID = "brmk-space-card";
 	var SCENE = "space";
 	var ANN_ANCHORS = [".ann-section", "#ann-card"];
@@ -2438,8 +3322,18 @@
 	}
 	function titleNickname() {
 		const title = document.title || "";
-		const m = /^(.+?)的个人空间/.exec(title);
+		const m = /^(.+?)(?:的个人空间|个人动态)/.exec(title);
 		return m ? m[1].trim().slice(0, 100) : "";
+	}
+	function avatarFaceOf(host) {
+		for (const img of queryDeepAll(host, "img", {
+			maxDepth: 4,
+			limit: 10
+		})) {
+			const src = img.getAttribute("src") ?? img.getAttribute("data-src") ?? "";
+			if (src.includes("/bfs/face/")) return src;
+		}
+		return "";
 	}
 	function findHost() {
 		const hits = [];
@@ -2513,6 +3407,8 @@
 	function mount(host, mid) {
 		const nickname = titleNickname();
 		if (nickname) rememberNick(mid, nickname);
+		const face = avatarFaceOf(host);
+		if (face) rememberFace(mid, face);
 		const el = h("div", "brmk-space-card");
 		el.id = CARD_ID;
 		el.setAttribute("data-brmk-mid", mid);
@@ -2763,7 +3659,7 @@
 		}
 		if (!host) {
 			destroy();
-			diag.notes.push("未找到 .aside 侧栏（可能未登录、页面未渲染完或已改版）");
+			diag.notes.push("未找到右侧栏 .aside / .space-dynamic__right（可能未登录、页面未渲染完或已改版）");
 			setDiagnostic(diag);
 			return diag;
 		}
@@ -2805,6 +3701,124 @@
 	}
 	function clearSpaceAside() {
 		destroy();
+	}
+	var CARD_API = "https://api.bilibili.com/x/user/card";
+	var FAIL_COOLDOWN_MS = 6e5;
+	var QUEUE_GAP_MS = 300;
+	var SEEN_FLUSH_MS = 2e3;
+	function onBilibili() {
+		return /(^|\.)bilibili\.com$/i.test(location.hostname);
+	}
+	function gmGetJson(url) {
+		return new Promise((resolve, reject) => {
+			if (typeof GM_xmlhttpRequest === "function") {
+				GM_xmlhttpRequest({
+					method: "GET",
+					url,
+					timeout: 1e4,
+					onload: (res) => {
+						try {
+							resolve(JSON.parse(res.responseText));
+						} catch (err) {
+							reject(err);
+						}
+					},
+					onerror: () => reject(new Error("网络错误")),
+					ontimeout: () => reject(new Error("请求超时"))
+				});
+				return;
+			}
+			fetch(url, { credentials: "include" }).then((res) => res.json()).then(resolve, reject);
+		});
+	}
+	var inflight = new Map();
+	var failedAt = new Map();
+	async function fetchFace(mid) {
+		if (!onBilibili()) return null;
+		const pending = inflight.get(mid);
+		if (pending) return pending;
+		const lastFail = failedAt.get(mid);
+		if (lastFail && Date.now() - lastFail < FAIL_COOLDOWN_MS) return null;
+		const task = (async () => {
+			try {
+				const json = await gmGetJson(`${CARD_API}?mid=${encodeURIComponent(mid)}`);
+				if (json?.code !== 0) throw new Error(`接口返回 code=${json?.code}`);
+				const face = typeof json.data?.face === "string" ? json.data.face : "";
+				if (!/^https?:\/\//.test(face)) throw new Error("返回无头像");
+				failedAt.delete(mid);
+				return face;
+			} catch (err) {
+				failedAt.set(mid, Date.now());
+				log(`头像补全失败 mid=${mid}`, err);
+				return null;
+			} finally {
+				inflight.delete(mid);
+			}
+		})();
+		inflight.set(mid, task);
+		return task;
+	}
+	var queue = [];
+	var draining = false;
+	var pendingPatch = new Map();
+	function shouldBackfill(mid) {
+		const rec = store.get(mid);
+		if (!rec || rec.faceSnapshot) return false;
+		if (inflight.has(mid)) return false;
+		const lastFail = failedAt.get(mid);
+		return !(lastFail && Date.now() - lastFail < FAIL_COOLDOWN_MS);
+	}
+	function requestFaceBackfill(mids) {
+		if (!onBilibili()) return;
+		let added = false;
+		for (const mid of mids) {
+			if (!shouldBackfill(mid)) continue;
+			if (!queue.includes(mid)) {
+				queue.push(mid);
+				added = true;
+			}
+		}
+		if (added) drainQueue();
+	}
+	async function drainQueue() {
+		if (draining) return;
+		draining = true;
+		try {
+			while (queue.length) {
+				const mid = queue.shift();
+				const face = await fetchFace(mid);
+				if (face) pendingPatch.set(mid, face);
+				if (queue.length) await new Promise((r) => setTimeout(r, QUEUE_GAP_MS));
+			}
+		} finally {
+			draining = false;
+		}
+		flushPendingPatch();
+	}
+	function flushPendingPatch() {
+		if (!pendingPatch.size) return;
+		const map = new Map(pendingPatch);
+		pendingPatch.clear();
+		store.patchFaces(map);
+	}
+	var seenFaces = new Map();
+	var seenTimer = null;
+	function initFaceBackfill() {
+		on("face-seen", (payload) => {
+			const mid = payload?.mid;
+			if (typeof mid !== "string") return;
+			if (!shouldBackfill(mid)) return;
+			const face = faceOf(mid);
+			if (!face) return;
+			seenFaces.set(mid, face);
+			if (seenTimer !== null) return;
+			seenTimer = setTimeout(() => {
+				seenTimer = null;
+				const map = new Map(seenFaces);
+				seenFaces.clear();
+				store.patchFaces(map);
+			}, SEEN_FLUSH_MS);
+		});
 	}
 	var SCENE_LABELS = {
 		videoUp: "视频 UP 主",
@@ -3107,6 +4121,7 @@
 		}
 		renderPager(r, list.length, totalPages);
 		renderBatchBar(r);
+		requestFaceBackfill(rows.filter((rec) => !rec.faceSnapshot).map((rec) => rec.mid));
 	}
 	function renderPager(r, total, totalPages) {
 		r.pager.textContent = "";
@@ -3174,7 +4189,12 @@
 		const scenes = section("场景开关");
 		const SCENE_HINTS = {
 			videoUp: "视频页 UP 主昵称旁显示备注",
-			space: "个人空间右侧侧栏显示独立备注卡片"
+			comment: "评论者昵称旁显示备注（主楼 + 楼中楼回复）",
+			space: "个人空间右侧侧栏显示独立备注卡片",
+			dynamic: "动态发布者昵称旁显示备注（opus 图文动态）",
+			card: "卡片 UP 主昵称旁显示备注（首页 / 搜索 / 视频页右栏）",
+			relation: "关系列表用户昵称旁显示备注（粉丝 / 关注两个子页）",
+			message: "私信会话列表与聊天窗对方昵称旁显示备注"
 		};
 		for (const def of [
 			{
@@ -3183,7 +4203,7 @@
 			},
 			{
 				key: "comment",
-				soon: true
+				soon: false
 			},
 			{
 				key: "space",
@@ -3191,11 +4211,11 @@
 			},
 			{
 				key: "dynamic",
-				soon: true
+				soon: false
 			},
 			{
 				key: "card",
-				soon: true
+				soon: false
 			},
 			{
 				key: "live",
@@ -3203,11 +4223,11 @@
 			},
 			{
 				key: "relation",
-				soon: true
+				soon: false
 			},
 			{
 				key: "message",
-				soon: true
+				soon: false
 			}
 		]) scenes.appendChild(fieldRow(SCENE_LABELS[def.key], def.soon ? "本里程碑未实现，开关暂不生效" : SCENE_HINTS[def.key] ?? "", switchEl(settings.scenes[def.key], (next) => {
 			updateSettings((s) => {
@@ -3958,7 +4978,7 @@
 	function doctorEnabled() {
 		return getSettings().advanced.debug;
 	}
-	var VERSION = "1.0.0";
+	var VERSION = "1.6.1";
 	var APP_NS = "__biliRemark__";
 	var observer = null;
 	var scanTimer = null;
@@ -4001,8 +5021,10 @@
 		guard("scan", () => {
 			const settings = getSettings();
 			if (!settings.enabled) {
+				cancelCommentBatch();
 				clearInjected();
 				clearSpaceAside();
+				clearCardInline();
 				return;
 			}
 			pruneBadges();
@@ -4014,6 +5036,26 @@
 				if (settings.scenes.space) scanSpaceAside();
 				else clearSpaceAside();
 			} else clearSpaceAside();
+			if (hasCommentHost()) {
+				if (settings.scenes.comment) scanComments();
+				else clearCommentPencils();
+			}
+			if (isDynamicPage()) {
+				if (settings.scenes.dynamic) scanDynamic();
+				else clearDynamicPencils();
+			}
+			if (hasCardHost()) {
+				if (settings.scenes.card) scanCards();
+				else clearCardPencils();
+			}
+			if (isImPage()) {
+				if (settings.scenes.message) scanIm();
+				else clearImPencils();
+			}
+			if (isRelationPage()) {
+				if (settings.scenes.relation) scanRelation();
+				else clearRelationPencils();
+			}
 			log("扫描完成，徽标数", badgeCount());
 		}, void 0);
 	}
@@ -4043,6 +5085,7 @@
 	}
 	function onRouteChange() {
 		log("路由变化", location.href);
+		cancelCommentBatch();
 		clearInjected();
 		if (!isSpacePage()) clearSpaceAside();
 		closeDoctor();
@@ -4148,6 +5191,7 @@
 		if (started) return;
 		started = true;
 		store.load();
+		initFaceBackfill();
 		refreshTheme();
 		installStyles();
 		themeCleanup = watchTheme(() => {

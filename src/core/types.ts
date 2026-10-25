@@ -73,6 +73,8 @@ export interface Settings {
   manager: ManagerSettings
   backup: BackupSettings
   advanced: AdvancedSettings
+  /** 一次性迁移标记（只随存储持久化，DEFAULT_SETTINGS 不携带）：键名 = 迁移日期+主题 */
+  migrations?: Record<string, boolean>
 }
 
 export interface ImportPreview {

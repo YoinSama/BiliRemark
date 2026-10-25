@@ -6,6 +6,7 @@ export type BusEvent =
   | 'request-manager'
   | 'request-doctor'
   | 'enabled-changed'
+  | 'face-seen'
 
 type Handler = (payload?: unknown) => void
 

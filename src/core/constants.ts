@@ -28,10 +28,13 @@ export const DEFAULT_SETTINGS: Settings = {
     comment: true,
     space: true,
     dynamic: true,
-    card: false,
+    /** S5 视频卡片（v1.3.0）：首页 / 搜索 / 视频页右栏，解灰并默认开启 */
+    card: true,
     live: false,
-    relation: false,
-    message: false,
+    /** S7 关注/粉丝（v1.6.0）：关系列表行卡片昵称旁，解灰并默认开启 */
+    relation: true,
+    /** S8 私信（v1.5.0）：会话列表行 + 聊天窗头部，解灰并默认开启 */
+    message: true,
   },
   display: {
     position: 'afterName',

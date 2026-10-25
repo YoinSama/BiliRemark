@@ -60,28 +60,37 @@ function buildCss(theme: ThemeInfo): string {
   return `
 /* ===== BiliRemark 样式（全部 brmk- 前缀，不覆盖页面既有样式） ===== */
 /* 页面内浮层：徽标 / 铅笔都挂在这里，绝不进入 B 站自己的容器 */
+/* 页面内浮层：徽标 / 铅笔都挂在这里，绝不进入 B 站自己的容器。
+   层钉在文档原点（absolute 而非 fixed），徽标按文档坐标定位 —— 主文档滚动时
+   徽标与页面内容同帧移动，不需要 JS 追帧重算（那会慢一帧，看起来在飘）。
+   width:100% 不能省：徽标 max-width 里的 100% 和 shrink-to-fit 都按包含块解析，
+   层宽为 0 会把徽标塌缩成一个点。height:0 不参与布局，仅作定位原点。 */
 #brmk-layer{
-  position:fixed; left:0; top:0; width:100%; height:100%;
+  position:absolute; left:0; top:0; width:100%; height:0;
   z-index:99997; pointer-events:none; overflow:visible;
   contain:layout style;
 }
+/* portal 用 translate 属性定位（不用 transform，避免被 .brmk-badge 的 transform 过渡拖成飞入/弹跳） */
 #brmk-layer>.brmk-badge,#brmk-layer>.brmk-pencil{
   position:absolute; left:0; top:0; margin:0; pointer-events:auto;
-  will-change:transform; transform:translate3d(0,0,0);
+  will-change:translate;
 }
 .brmk-badge{
   display:inline-flex; align-items:center; gap:4px;
   margin:0; padding:0 7px; height:18px; max-width:min(240px, 100%);
   border-radius:9px; vertical-align:middle;
+  /* 内联挂法（评论区夹在昵称和等级之间）：flex 组里垂直居中、不被压缩 */
+  align-self:center; flex:none;
   font-family:${FONT_STACK}; font-size:12px; font-weight:500; line-height:16px;
   letter-spacing:0; white-space:nowrap; cursor:pointer; user-select:none;
   color:var(--brmk-c, ${p.accent});
-  background:color-mix(in srgb, var(--brmk-c, ${p.accent}) 12%, transparent);
+  /* 不透明底：浮层徽标会盖在页面文字上，透底会显得到处叠字 */
+  background:color-mix(in srgb, var(--brmk-c, ${p.accent}) 14%, ${p.bg});
   border:1px solid color-mix(in srgb, var(--brmk-c, ${p.accent}) 38%, transparent);
   transition:background .12s ease, transform .12s ease;
 }
 .brmk-badge:hover{
-  background:color-mix(in srgb, var(--brmk-c, ${p.accent}) 22%, transparent);
+  background:color-mix(in srgb, var(--brmk-c, ${p.accent}) 24%, ${p.bg});
 }
 .brmk-badge:active{ transform:scale(.97); }
 .brmk-badge.brmk-hover-only{ opacity:0; }
@@ -104,6 +113,18 @@ function buildCss(theme: ThemeInfo): string {
 /* 浮层给的空间不够时（portal 打的标记），先让位给备注名，标签胶囊收起 */
 .brmk-badge[data-brmk-tight] .brmk-tags{ display:none; }
 .brmk-badge[data-brmk-tight] .brmk-name{ max-width:100%; }
+/* 内联挂法（评论区夹在昵称和等级之间）：边距对齐原生昵称行节奏 ——
+   真机实测等级图标 margin-left 5px，徽标跟它同节奏；右侧不另加，
+   让后面元素（等级图标）自带的 5px 左边距生效 */
+.brmk-badge.brmk-inline{ margin:0 0 0 5px; }
+/* 内联徽标随评论淡入（160ms），避免加载完成后成批突现 */
+.brmk-badge.brmk-inline{ animation:brmk-badge-in .16s ease-out; }
+@keyframes brmk-badge-in{ from{ opacity:0 } }
+
+/* S5 视频页右栏三行布局：备注行作为卡片 .info 内的一行（.upname 与 .playinfo 之间）。
+   进入文档流前先隐藏，插入后靠这个类显现（替代浮层的定位职责） */
+.brmk-card-badge-row{ margin:3px 0 0; line-height:1.6; }
+.brmk-card-badge-row .brmk-badge{ max-width:100%; animation:brmk-badge-in .16s ease-out; }
 
 .brmk-pencil{
   display:inline-flex; align-items:center; justify-content:center;
@@ -463,6 +484,7 @@ function buildCss(theme: ThemeInfo): string {
 @media (prefers-reduced-motion: reduce){
   #brmk-editor,#brmk-manager,#brmk-manager .brmk-panel,#brmk-toast .brmk-toast-item{ animation:none !important; }
   .brmk-badge,.brmk-pencil,.brmk-switch,.brmk-switch::after{ transition:none !important; }
+  .brmk-badge.brmk-inline{ animation:none !important; }
 }
 `.trim()
 }

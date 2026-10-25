@@ -17,7 +17,7 @@ export default defineConfig({
       userscript: {
         name: 'BiliRemark',
         namespace: 'https://github.com/YoinSama/BiliRemark',
-        version: '1.0.2',
+        version: '1.6.1',
         description: 'B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。',
         author: 'Yoin',
         license: 'MIT',
@@ -25,6 +25,7 @@ export default defineConfig({
         'run-at': 'document-idle',
         'updateURL': 'https://raw.githubusercontent.com/YoinSama/BiliRemark/main/dist/BiliRemark.user.js',
         'downloadURL': 'https://raw.githubusercontent.com/YoinSama/BiliRemark/main/dist/BiliRemark.user.js',
+        'connect': ['api.bilibili.com'],
         grant: [
           'GM_getValue',
           'GM_setValue',
@@ -32,6 +33,7 @@ export default defineConfig({
           'GM_registerMenuCommand',
           'GM_setClipboard',
           'GM_info',
+          'GM_xmlhttpRequest',
           'unsafeWindow',
         ],
       },

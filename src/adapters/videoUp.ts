@@ -1,10 +1,9 @@
 import { getSettings } from '../core/config'
 import { pageUpMid, pageUpName, resolveFromElement, snapshotNickname } from '../core/midResolver'
-import { rememberNick, setDiagnostic, type SceneDiagnostic } from '../core/runtime'
+import { faceOf, rememberFace, rememberNick, setDiagnostic, type SceneDiagnostic } from '../core/runtime'
 import { store } from '../core/store'
-import { badgeOptions, ensurePencil, renderBadge } from '../ui/badge'
-import * as portal from '../ui/portal'
-import { isVisible, qs, qsa } from '../util/dom'
+import { badgeOptions, clearPencilsOfScene, ensurePencil, renderBadge } from '../ui/badge'
+import { closestDeep, isVisible, qs, qsa } from '../util/dom'
 
 /** 主 UP 主信息区容器：刻意不含推荐卡片，避免 M1 越界去改卡片场景（S5） */
 const SCOPES = ['#v_upinfo', '.up-detail', '.video-info-meta', '.up-info--right', '.video-info-container']
@@ -28,6 +27,7 @@ interface UpTarget {
   anchor: Element
   mid: string
   nickname: string
+  face: string
 }
 
 function inScope(el: Element): boolean {
@@ -35,6 +35,26 @@ function inScope(el: Element): boolean {
     if (el.closest(scope)) return true
   }
   return false
+}
+
+/** UP 主头像候选：优先真实头像（bfs/face），兜底取信息区内的头像位 img；data: URI 是夹具占位，不快照 */
+const FACE_IMGS = [
+  'img[src*="/bfs/face/"]',
+  'img[data-src*="/bfs/face/"]',
+  '.up-avatar-wrap img',
+  '.up-avatar img',
+  '.bili-avatar img',
+]
+
+function faceNear(el: Element): string {
+  const container = closestDeep(el, SCOPES.join(','))
+  if (!container) return ''
+  for (const selector of FACE_IMGS) {
+    const img = qs<HTMLImageElement>(selector, container)
+    const src = img?.getAttribute('src') ?? img?.getAttribute('data-src') ?? ''
+    if (src && !src.startsWith('data:')) return src
+  }
+  return ''
 }
 
 function pickTargets(): { targets: UpTarget[]; hits: { selector: string; hits: number }[] } {
@@ -55,6 +75,7 @@ function pickTargets(): { targets: UpTarget[]; hits: { selector: string; hits: n
         anchor: el,
         mid,
         nickname: snapshotNickname(el) || (targets.length === 0 ? pageUpName() : ''),
+        face: faceNear(el),
       })
     }
     if (targets.length) break
@@ -69,7 +90,7 @@ function pickTargets(): { targets: UpTarget[]; hits: { selector: string; hits: n
         if (!container) continue
         const link = qs<HTMLAnchorElement>('a[href*="space.bilibili.com/"]', container)
         if (link && isVisible(link)) {
-          targets.push({ anchor: link, mid, nickname: pageUpName() || snapshotNickname(link) })
+          targets.push({ anchor: link, mid, nickname: pageUpName() || snapshotNickname(link), face: faceNear(link) })
           break
         }
       }
@@ -87,6 +108,7 @@ function inject(targets: UpTarget[]): number {
   for (const target of targets) {
     if (!target.anchor.isConnected) continue
     rememberNick(target.mid, target.nickname)
+    if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face)
     const record = store.get(target.mid)
     if (record) {
       if (renderBadge(target.anchor, record, opts)) injected++
@@ -118,5 +140,5 @@ export function scanVideoUp(): SceneDiagnostic {
 
 /** 关闭场景或全局开关时，移除本场景注入的铅笔入口（徽标由全局清理） */
 export function clearVideoUpPencils(): void {
-  portal.clearSlot('pencil')
+  clearPencilsOfScene('videoUp')
 }

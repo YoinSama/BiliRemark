@@ -29,6 +29,8 @@ interface AnchorSlots {
 const byAnchor = new Map<Element, AnchorSlots>()
 const byEl = new WeakMap<HTMLElement, { anchor: Element; slot: Slot }>()
 const lastPos = new WeakMap<HTMLElement, string>()
+/** 最近一次测得的文档坐标（主文档滚动时用它做零开销可见性刷新，不重新测量） */
+const docRect = new WeakMap<HTMLElement, { x: number; y: number; w: number; h: number; ok: boolean }>()
 
 let layer: HTMLElement | null = null
 let rafId = 0
@@ -53,11 +55,46 @@ function onViewportChange(): void {
   schedule()
 }
 
+/**
+ * 滚动分两类：
+ *  - 主文档滚动：徽标的文档坐标不变，只按缓存位置刷新可见性。
+ *    绝不能重新测量 + 写回定位 —— 那比滚动本身慢一帧，徽标看起来在「飘」。
+ *  - 页面内部滚动容器（评论区等）：锚点的文档坐标变了，走全量重排。
+ */
+function onScroll(ev: Event): void {
+  const t = ev.target
+  if (!t || t === document || t === document.documentElement) {
+    refreshVisibility()
+    return
+  }
+  schedule()
+}
+
+/** 主文档滚动时的廉价可见性刷新：零布局读、零定位写 */
+function refreshVisibility(): void {
+  const sx = window.scrollX
+  const sy = window.scrollY
+  const vw = document.documentElement.clientWidth || window.innerWidth
+  const vh = window.innerHeight
+  for (const slots of byAnchor.values()) {
+    for (const slot of SLOTS) {
+      const el = slots[slot]
+      if (!el || !el.isConnected) continue
+      const c = docRect.get(el)
+      if (!c || !c.ok) continue
+      const off =
+        c.y + c.h < sy - 8 || c.y > sy + vh + 8 || c.x + c.w < sx - 8 || c.x > sx + vw + 8
+      if (off) hide(el)
+      else show(el)
+    }
+  }
+}
+
 function bind(): void {
   if (bound) return
   bound = true
   // capture 才能收到页面内部滚动容器（评论区等）的 scroll
-  window.addEventListener('scroll', onViewportChange, { passive: true, capture: true })
+  window.addEventListener('scroll', onScroll, { passive: true, capture: true })
   window.addEventListener('resize', onViewportChange, { passive: true })
   try {
     window.visualViewport?.addEventListener('resize', onViewportChange, { passive: true })
@@ -132,19 +169,23 @@ function rowRightOf(anchor: Element): number {
 
 /**
  * 选址优先级：
+ *   0. 锚点行下方（仅 data-brmk-place="below" 的徽标，如首页/搜索卡片：与锚点行
+ *      左缘对齐、宽度受锚点父容器约束——卡片作者行是卡片信息区的整行，下方是留白）
  *   1. 锚点右侧（不压住同行任何兄弟）
  *   2. 整行末尾（不压住「发消息」之类同行按钮）
  *   3. 父容器下方
  * 都不合适时退回锚点右侧并夹进视口。
  */
-function place(anchor: Element, el: HTMLElement, vw: number, vh: number): void {
+function place(anchor: Element, el: HTMLElement, vw: number, vh: number, lrx: number, lry: number): void {
   const r = anchor.getBoundingClientRect()
   if (!r.width && !r.height) {
     hide(el)
+    docRect.set(el, { x: 0, y: 0, w: 0, h: 0, ok: false })
     return
   }
   if (r.bottom < -8 || r.top > vh + 8 || r.right < -8 || r.left > vw + 8) {
     hide(el)
+    docRect.set(el, { x: 0, y: 0, w: 0, h: 0, ok: false })
     return
   }
 
@@ -172,7 +213,17 @@ function place(anchor: Element, el: HTMLElement, vw: number, vh: number): void {
   let maxW: number
   let fits = true
 
-  if (limitRight - rightX >= need && !blockedBySibling(anchor, rightX, centeredY, naturalW, h)) {
+  const wantBelow = el.getAttribute('data-brmk-place') === 'below' && !!pr
+  if (wantBelow) {
+    x = Math.max(MARGIN, Math.round(r.left))
+    y = Math.round(r.bottom + 2)
+    // 卡片作者行的父容器就是卡片信息区整行，徽标宽度以它为界（超出走下方收档逻辑）
+    maxW = Math.round(pr!.right - 2) - x
+    if (maxW < need) {
+      fits = false
+      maxW = Math.max(need, vw - MARGIN * 2 - x)
+    }
+  } else if (limitRight - rightX >= need && !blockedBySibling(anchor, rightX, centeredY, naturalW, h)) {
     x = rightX
     y = centeredY
     maxW = limitRight - x
@@ -211,11 +262,19 @@ function place(anchor: Element, el: HTMLElement, vw: number, vh: number): void {
     y = clamp(y, MARGIN, vh - MARGIN * 2 - h)
   }
 
-  const sig = `${x},${y},${width}`
+  // 定位必须走独立的 translate 属性而不是 transform：.brmk-badge 的 transition
+  // 里有 transform（按压 scale 用的），若用 transform 定位，任何写回都会被过渡拖慢。
+  // 坐标系：浮层本体钉在文档原点（absolute，随页面滚动），所以 translate 取
+  // 「视口坐标 − 浮层视口偏移」＝文档坐标；主文档滚动时这里完全不被调用，
+  // 徽标与页面同帧移动，不存在 JS 追帧造成的飘移。
+  const docX = x + window.scrollX
+  const docY = y + window.scrollY
+  const sig = `${docX},${docY},${width}`
   if (lastPos.get(el) !== sig) {
-    el.style.transform = `translate3d(${x}px, ${y}px, 0)`
+    el.style.translate = `${x - lrx}px ${y - lry}px`
     lastPos.set(el, sig)
   }
+  docRect.set(el, { x: docX, y: docY, w: width, h, ok: true })
   show(el)
 }
 
@@ -226,6 +285,10 @@ function sync(): void {
   }
   const vw = document.documentElement.clientWidth || window.innerWidth
   const vh = window.innerHeight
+  // 浮层自己的视口位置（每轮量一次）：它钉在文档原点附近，视口偏移即滚动补偿
+  const lr = layer?.getBoundingClientRect()
+  const lrx = lr ? lr.left : 0
+  const lry = lr ? lr.top : 0
   const dead: Element[] = []
 
   for (const [anchor, slots] of byAnchor) {
@@ -241,7 +304,7 @@ function sync(): void {
         byEl.delete(el)
         continue
       }
-      place(anchor, el, vw, vh)
+      place(anchor, el, vw, vh, lrx, lry)
     }
   }
 
@@ -376,7 +439,7 @@ export function dispose(): void {
     rafId = 0
   }
   if (bound) {
-    window.removeEventListener('scroll', onViewportChange, true)
+    window.removeEventListener('scroll', onScroll, true)
     window.removeEventListener('resize', onViewportChange)
     try {
       window.visualViewport?.removeEventListener('resize', onViewportChange)

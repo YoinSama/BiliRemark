@@ -80,6 +80,18 @@ function pageWindow(): Record<string, any> | null {
   }
 }
 
+/** 页面全局状态（隔离世界下经 unsafeWindow 读取），取不到返回 null */
+export function pageState(): Record<string, any> | null {
+  const w = pageWindow()
+  if (!w) return null
+  try {
+    const s = w.__INITIAL_STATE__
+    return s && typeof s === 'object' ? (s as Record<string, any>) : null
+  } catch {
+    return null
+  }
+}
+
 function pickMid(value: unknown): string | null {
   if (typeof value === 'number') {
     const s = String(value)

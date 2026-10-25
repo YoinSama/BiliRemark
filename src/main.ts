@@ -1,4 +1,9 @@
+import { cancelCommentBatch, clearCommentPencils, hasCommentHost, scanComments } from './adapters/comment'
+import { clearCardInline, clearCardPencils, hasCardHost, scanCards } from './adapters/card'
+import { clearDynamicPencils, isDynamicPage, scanDynamic } from './adapters/dynamic'
 import { clearVideoUpPencils, isVideoPage, scanVideoUp } from './adapters/videoUp'
+import { clearImPencils, isImPage, scanIm } from './adapters/im'
+import { clearRelationPencils, isRelationPage, scanRelation } from './adapters/relation'
 import { clearSpaceAside, isSpacePage, scanSpaceAside } from './adapters/spaceAside'
 import { getSettings, reloadSettings, updateSettings } from './core/config'
 import { STORAGE } from './core/constants'
@@ -6,6 +11,7 @@ import { emit, on } from './core/bus'
 import { refreshTheme, installStyles } from './ui/theme'
 import { watchTheme } from './core/env'
 import { store } from './core/store'
+import { initFaceBackfill } from './core/faceFetch'
 import { downloadText, stampForFile } from './util/format'
 import { guard, log, warn } from './util/log'
 import { openManager, closeManager, isManagerOpen, toggleManager } from './ui/manager'
@@ -14,7 +20,7 @@ import { openDoctor, closeDoctor, setDoctorRescan, isDoctorOpen, doctorEnabled }
 import { badgeCount, clearAll, pruneBadges } from './ui/badge'
 import { toast } from './ui/toast'
 
-const VERSION = '1.0.0'
+const VERSION = '1.6.1'
 const APP_NS = '__biliRemark__'
 
 let observer: MutationObserver | null = null
@@ -66,8 +72,10 @@ function scanNow(): void {
   guard('scan', () => {
     const settings = getSettings()
     if (!settings.enabled) {
+      cancelCommentBatch()
       clearInjected()
       clearSpaceAside()
+      clearCardInline()
       return
     }
     pruneBadges()
@@ -82,6 +90,31 @@ function scanNow(): void {
       else clearSpaceAside()
     } else {
       clearSpaceAside()
+    }
+    // 评论区按组件结构探测（视频页 / 动态 / 专栏都可能承载 bili-comments），不按路由硬编码
+    if (hasCommentHost()) {
+      if (settings.scenes.comment) scanComments()
+      else clearCommentPencils()
+    }
+    // 动态页（opus 图文动态；旧版 t.bilibili.com 第 2 期接入）
+    if (isDynamicPage()) {
+      if (settings.scenes.dynamic) scanDynamic()
+      else clearDynamicPencils()
+    }
+    // 视频卡片（首页 feed / 搜索结果 / 视频页右栏），按容器结构探测不按路由
+    if (hasCardHost()) {
+      if (settings.scenes.card) scanCards()
+      else clearCardPencils()
+    }
+    // 私信页（message.bilibili.com/#/whisper，会话列表行 + 聊天窗头部）
+    if (isImPage()) {
+      if (settings.scenes.message) scanIm()
+      else clearImPencils()
+    }
+    // 关注 / 粉丝列表（space.bilibili.com/<mid>/relation/*，行卡片昵称旁）
+    if (isRelationPage()) {
+      if (settings.scenes.relation) scanRelation()
+      else clearRelationPencils()
     }
     log('扫描完成，徽标数', badgeCount())
   }, undefined)
@@ -114,6 +147,7 @@ function stopObserver(): void {
 
 function onRouteChange(): void {
   log('路由变化', location.href)
+  cancelCommentBatch()
   clearInjected()
   // 离开空间页时立刻移除模块，避免残留上一个用户的备注；空间页内切 tab 交给扫描幂等处理
   if (!isSpacePage()) clearSpaceAside()
@@ -243,6 +277,7 @@ function boot(): void {
   started = true
 
   store.load()
+  initFaceBackfill()
   refreshTheme()
   installStyles()
 

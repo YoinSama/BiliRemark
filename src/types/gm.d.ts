@@ -23,6 +23,16 @@ declare function GM_registerMenuCommand(
 
 declare function GM_setClipboard(text: string, info?: string | { type?: string; mimetype?: string }): void
 
+declare function GM_xmlhttpRequest(details: {
+  method: 'GET' | 'POST' | 'HEAD'
+  url: string
+  timeout?: number
+  headers?: Record<string, string>
+  onload?: (response: { status: number; responseText: string }) => void
+  onerror?: (response: unknown) => void
+  ontimeout?: (response: unknown) => void
+}): unknown
+
 declare const GM_info: {
   script: {
     name: string
