@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliRemark
 // @namespace    https://github.com/YoinSama/BiliRemark
-// @version      1.7.4
+// @version      1.7.5
 // @author       Yoin
 // @description  B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。
 // @license      MIT
@@ -24,7 +24,7 @@
 
 (function() {
 	"use strict";
-	var VERSION = "1.7.4";
+	var VERSION = "1.7.5";
 	var STORAGE = {
 		data: "brmk.data.v1",
 		settings: "brmk.settings.v1",
@@ -1647,10 +1647,8 @@
 			if (naturalW > maxW) el.style.maxWidth = `${Math.max(floorW, Math.floor(maxW))}px`;
 		}
 		const width = el.offsetWidth || naturalW;
-		if (!fits) {
-			x = clamp(x, MARGIN, vw - 8 - width);
-			y = clamp(y, MARGIN, vh - 8 - h);
-		} else x = Math.max(MARGIN, x);
+		if (!fits) x = clamp(x, MARGIN, vw - 8 - width);
+		else x = Math.max(MARGIN, x);
 		const docX = x + window.scrollX;
 		const docY = y + window.scrollY;
 		const sig = `${docX},${docY},${width}`;

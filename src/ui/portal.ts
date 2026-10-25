@@ -348,15 +348,16 @@ function place(anchor: Element, el: HTMLElement, vw: number, vh: number, lrx: nu
   }
 
   const width = el.offsetWidth || naturalW
+  // y 在任何分支都不夹进视口：夹了会把「锚点半出视口」的徽标硬推进视口内，恰好发生在
+  // 顶/底临界滚动窗口（200ms 轮询每次都重算）——徽标脱离锚点往下挪、压到下一行
+  // （2026-10-25 主人报障：视频页 UP 备注撞签名行；兜底分支同样命中——S7 关系卡
+  // 真机落点就是父容器下方，窄列宽徽标 maxW<need 时 fits=false 走到这里）。
+  // 正确行为是贴死锚点随页面滚出去：滚出视口由 refreshVisibility 隐藏，
+  // 被吸顶/固定栏盖住由层 z-index 负责（LAYER_Z）。
   if (!fits) {
     x = clamp(x, MARGIN, vw - MARGIN * 2 - width)
-    y = clamp(y, MARGIN, vh - MARGIN * 2 - h)
   } else {
     x = Math.max(MARGIN, x)
-    // y 绝不夹进视口：夹了会把「锚点半出视口」的徽标硬推进视口内，恰好发生在
-    // 顶/底临界滚动窗口（200ms 轮询每次都重算）——徽标脱离锚点往下挪、压到下一行
-    // （主人 2026-10-25 报障：视频页 UP 备注撞签名行）。正确行为是贴死锚点随页面
-    // 滚出去，滚出视口由 refreshVisibility 隐藏；被顶栏盖住由层 z-index 负责。
   }
 
   // 定位必须走独立的 translate 属性而不是 transform：.brmk-badge 的 transition
