@@ -11,7 +11,6 @@ import { emit, on } from './core/bus'
 import { refreshTheme, installStyles } from './ui/theme'
 import { watchTheme } from './core/env'
 import { store } from './core/store'
-import { initFaceBackfill } from './core/faceFetch'
 import { downloadText, stampForFile } from './util/format'
 import { guard, log, warn } from './util/log'
 import { openManager, closeManager, isManagerOpen, toggleManager } from './ui/manager'
@@ -282,7 +281,6 @@ function boot(): void {
   started = true
 
   store.load()
-  initFaceBackfill()
   refreshTheme()
   installStyles()
 

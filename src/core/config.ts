@@ -81,6 +81,7 @@ function mergeSettings(base: Settings, raw: unknown): Settings {
     base.manager.pageSize = num(m.pageSize, base.manager.pageSize, 10, 500)
     base.manager.theme = m.theme === 'dark' || m.theme === 'light' ? m.theme : 'auto'
     base.manager.zIndex = num(m.zIndex, base.manager.zIndex, 1000, 2147483000)
+    base.manager.maskBlur = bool(m.maskBlur, base.manager.maskBlur)
   }
 
   if (r.backup && typeof r.backup === 'object') {

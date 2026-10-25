@@ -1,5 +1,4 @@
 import type { SceneKey } from './types'
-import { emit } from './bus'
 
 /** 运行期缓存：当前页面解析到的昵称，用于「昵称已变」提示（不联网） */
 export const nickCache = new Map<string, string>()
@@ -16,11 +15,7 @@ export const faceCache = new Map<string, string>()
 export function rememberFace(mid: string, face: string): void {
   const url = (face || '').trim()
   if (!mid || !url) return
-  if (!faceCache.has(mid)) {
-    faceCache.set(mid, url)
-    // 供旧数据头像回填监听（见 core/faceFetch），每次页面加载每个 mid 只发一次
-    emit('face-seen', { mid, url })
-  }
+  if (!faceCache.has(mid)) faceCache.set(mid, url)
 }
 
 export function faceOf(mid: string): string | undefined {

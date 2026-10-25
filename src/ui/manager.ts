@@ -1,7 +1,6 @@
 import { LIMITS, TAG_PRESET_COLORS, VERSION } from '../core/constants'
 import { getSettings, resetSettings, updateSettings } from '../core/config'
 import { nickCache } from '../core/runtime'
-import { requestFaceBackfill } from '../core/faceFetch'
 import { store, normalizeRecord } from '../core/store'
 import type { MergeStrategy, SceneKey, UserRecord } from '../core/types'
 import { on } from '../core/bus'
@@ -77,6 +76,48 @@ let refs: Refs | null = null
 let unbindBus: (() => void) | null = null
 let prevOverflow = ''
 let keyHandler: ((ev: KeyboardEvent) => void) | null = null
+
+// data-changed 重渲染调度：150ms 去抖 + 滚动挂起（滚动中不整表重建，停止 200ms 后补渲染）
+let renderDebounce: number | null = null
+let scrollSilence: number | null = null
+let userScrolling = false
+let renderPending = false
+
+function clearRenderSchedule(): void {
+  if (renderDebounce !== null) window.clearTimeout(renderDebounce)
+  if (scrollSilence !== null) window.clearTimeout(scrollSilence)
+  renderDebounce = null
+  scrollSilence = null
+  userScrolling = false
+  renderPending = false
+}
+
+function scheduleDataRender(): void {
+  if (renderDebounce !== null) window.clearTimeout(renderDebounce)
+  renderDebounce = window.setTimeout(() => {
+    renderDebounce = null
+    if (userScrolling) {
+      renderPending = true
+      return
+    }
+    renderPending = false
+    renderAll()
+  }, 150)
+}
+
+/** 捕获阶段接住面板内任何滚动容器（列表/设置页）：置位滚动窗口，静默 200ms 判停 */
+function onPanelScroll(): void {
+  userScrolling = true
+  if (scrollSilence !== null) window.clearTimeout(scrollSilence)
+  scrollSilence = window.setTimeout(() => {
+    userScrolling = false
+    scrollSilence = null
+    if (renderPending && refs) {
+      renderPending = false
+      renderAll()
+    }
+  }, 200)
+}
 
 function btn(label: string, className: string, onClick: (ev: MouseEvent) => void): HTMLButtonElement {
   const b = h('button', className, label)
@@ -305,21 +346,6 @@ function renderTable(r: Refs): void {
 
     const tdUser = document.createElement('td')
     const userLine = h('div', 'brmk-cell-main')
-    const avatar = h('img')
-    avatar.width = 20
-    avatar.height = 20
-    avatar.style.borderRadius = '50%'
-    avatar.style.verticalAlign = '-5px'
-    avatar.style.marginRight = '6px'
-    avatar.style.objectFit = 'cover'
-    avatar.alt = ''
-    if (rec.faceSnapshot) {
-      avatar.src = rec.faceSnapshot
-      avatar.addEventListener('error', () => avatar.remove())
-    } else {
-      avatar.style.display = 'none'
-    }
-    userLine.appendChild(avatar)
     userLine.appendChild(document.createTextNode(rec.nickSnapshot || '（无昵称快照）'))
     const currentNick = nickCache.get(rec.mid)
     if (currentNick && rec.nickSnapshot && currentNick !== rec.nickSnapshot) {
@@ -433,9 +459,6 @@ function renderTable(r: Refs): void {
 
   renderPager(r, list.length, totalPages)
   renderBatchBar(r)
-
-  // 旧数据缺头像快照：对当前页懒加载补全，落库后经 data-changed 重渲染显示
-  requestFaceBackfill(rows.filter((rec) => !rec.faceSnapshot).map((rec) => rec.mid))
 }
 
 function renderPager(r: Refs, total: number, totalPages: number): void {
@@ -635,6 +658,12 @@ function renderSettings(r: Refs): void {
     applyPalette()
   })
   managerSec.appendChild(fieldRow('管理页面板配色', '不影响页面内备注标签', themeSelect))
+  managerSec.appendChild(fieldRow('遮罩背景模糊', '打开管理页时模糊背后页面，更沉浸但更耗性能', switchEl(settings.manager.maskBlur, (next) => {
+    updateSettings((s) => {
+      s.manager.maskBlur = next
+    })
+    applyPalette()
+  })))
   managerSec.appendChild(
     fieldRow(
       '面板层级 z-index',
@@ -762,6 +791,8 @@ function applyPalette(): void {
   if (!r) return
   const s = getSettings()
   r.root.style.zIndex = String(s.manager.zIndex)
+  if (s.manager.maskBlur) r.root.setAttribute('data-mask-blur', '1')
+  else r.root.removeAttribute('data-mask-blur')
   const p = managerPalette()
   const set = (name: string, value: string): void => r.root.style.setProperty(name, value)
   set('--brmk-bg', p.bg)
@@ -1258,6 +1289,7 @@ export function openManager(tab: Tab = 'list'): void {
   state.selected.clear()
   document.body.appendChild(r.root)
   applyPalette()
+  r.panel.addEventListener('scroll', onPanelScroll, true)
   bind(r)
   renderAll()
 
@@ -1266,8 +1298,7 @@ export function openManager(tab: Tab = 'list'): void {
 
   unbindBus = on('data-changed', () => {
     if (!refs) return
-    if (state.tab === 'settings') renderAll()
-    else renderAll()
+    scheduleDataRender()
   })
   const unbindTheme = on('theme-changed', () => applyPalette())
   const prevUnbind = unbindBus
@@ -1283,6 +1314,8 @@ export function closeManager(): void {
   if (!refs) return
   const r = refs
   refs = null
+  clearRenderSchedule()
+  r.panel.removeEventListener('scroll', onPanelScroll, true)
   hideSub()
   r.root.remove()
   document.body.style.overflow = prevOverflow

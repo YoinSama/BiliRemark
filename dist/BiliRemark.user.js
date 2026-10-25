@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliRemark
 // @namespace    https://github.com/YoinSama/BiliRemark
-// @version      1.7.1
+// @version      1.7.3
 // @author       Yoin
 // @description  B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。
 // @license      MIT
@@ -12,21 +12,19 @@
 // @match        https://t.bilibili.com/*
 // @match        https://message.bilibili.com/*
 // @match        https://search.bilibili.com/*
-// @connect      api.bilibili.com
 // @grant        GM_addValueChangeListener
 // @grant        GM_getValue
 // @grant        GM_info
 // @grant        GM_registerMenuCommand
 // @grant        GM_setClipboard
 // @grant        GM_setValue
-// @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @run-at       document-idle
 // ==/UserScript==
 
 (function() {
 	"use strict";
-	var VERSION = "1.7.1";
+	var VERSION = "1.7.3";
 	var STORAGE = {
 		data: "brmk.data.v1",
 		settings: "brmk.settings.v1",
@@ -68,7 +66,8 @@
 		manager: {
 			pageSize: 50,
 			theme: "auto",
-			zIndex: 99999
+			zIndex: 99999,
+			maskBlur: false
 		},
 		backup: {
 			lastExportAt: 0,
@@ -187,6 +186,7 @@
 			base.manager.pageSize = num(m.pageSize, base.manager.pageSize, 10, 500);
 			base.manager.theme = m.theme === "dark" || m.theme === "light" ? m.theme : "auto";
 			base.manager.zIndex = num(m.zIndex, base.manager.zIndex, 1e3, 2147483e3);
+			base.manager.maskBlur = bool(m.maskBlur, base.manager.maskBlur);
 		}
 		if (r.backup && typeof r.backup === "object") {
 			const b = r.backup;
@@ -453,13 +453,7 @@
 	function rememberFace(mid, face) {
 		const url = (face || "").trim();
 		if (!mid || !url) return;
-		if (!faceCache.has(mid)) {
-			faceCache.set(mid, url);
-			emit("face-seen", {
-				mid,
-				url
-			});
-		}
+		if (!faceCache.has(mid)) faceCache.set(mid, url);
 	}
 	function faceOf(mid) {
 		return faceCache.get(mid);
@@ -704,26 +698,6 @@
 				mids: [merged.mid]
 			});
 			return merged;
-		}
-		patchFaces(faces) {
-			const patched = [];
-			for (const [mid, face] of faces) {
-				const url = String(face ?? "").trim();
-				if (!/^https?:\/\//.test(url)) continue;
-				const rec = this.data.users[mid];
-				if (!rec || rec.faceSnapshot) continue;
-				rec.faceSnapshot = url.slice(0, 500);
-				patched.push(mid);
-			}
-			if (!patched.length) return [];
-			this.data.updatedAt = now();
-			this.dirty = true;
-			this.persistSoon();
-			emit("data-changed", {
-				reason: "patch-faces",
-				mids: patched
-			});
-			return patched;
 		}
 		remove(mid) {
 			const rec = this.data.users[mid];
@@ -2114,9 +2088,11 @@
   --brmk-bg:${p.bg}; --brmk-bg2:${p.bg2}; --brmk-bg3:${p.bg3}; --brmk-fg:${p.fg}; --brmk-fg2:${p.fg2};
   --brmk-border:${p.border}; --brmk-shadow:${p.shadow}; --brmk-accent:${p.accent};
   --brmk-accent-weak:${p.accentWeak}; --brmk-accent-border:${p.accentBorder};
-  background:${p.overlay}; backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+  background:${p.overlay};
   animation:brmk-fade .16s ease-out;
 }
+/* 遮罩模糊改为可选（v1.7.3 默认关）：backdrop-filter 全屏重采样在真机 GPU 上开销可观 */
+#brmk-manager[data-mask-blur="1"]{ backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
 @keyframes brmk-fade{ from{opacity:0} to{opacity:1} }
 #brmk-manager *{ box-sizing:border-box; font-family:inherit; }
 #brmk-manager .brmk-panel{
@@ -2166,7 +2142,7 @@
   background:var(--brmk-bg2); color:var(--brmk-fg); outline:none;
 }
 #brmk-manager .brmk-spacer{ flex:1; }
-#brmk-manager .brmk-body{ flex:1 1 auto; overflow:auto; margin:0 18px; border:1px solid var(--brmk-border); border-radius:8px; }
+#brmk-manager .brmk-body{ flex:1 1 auto; overflow:auto; overscroll-behavior:contain; margin:0 18px; border:1px solid var(--brmk-border); border-radius:8px; }
 #brmk-manager table{ width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
 #brmk-manager thead th{
   position:sticky; top:0; z-index:2; background:var(--brmk-bg2); color:var(--brmk-fg2);
@@ -2208,7 +2184,7 @@
 #brmk-manager .brmk-empty b{ display:block; font-size:15px; color:var(--brmk-fg); margin-bottom:6px; }
 
 /* 设置页 */
-#brmk-manager .brmk-settings{ flex:1 1 auto; overflow:auto; padding:14px 18px 24px; }
+#brmk-manager .brmk-settings{ flex:1 1 auto; overflow:auto; overscroll-behavior:contain; padding:14px 18px 24px; }
 #brmk-manager .brmk-sec{ margin-bottom:18px; border:1px solid var(--brmk-border); border-radius:8px; overflow:hidden; }
 #brmk-manager .brmk-sec-head{ padding:10px 12px; background:var(--brmk-bg2); font-size:13px; font-weight:600; border-bottom:1px solid var(--brmk-border); }
 #brmk-manager .brmk-row{
@@ -3999,124 +3975,6 @@
 	function clearSpaceAside() {
 		destroy();
 	}
-	var CARD_API = "https://api.bilibili.com/x/user/card";
-	var FAIL_COOLDOWN_MS = 6e5;
-	var QUEUE_GAP_MS = 300;
-	var SEEN_FLUSH_MS = 2e3;
-	function onBilibili() {
-		return /(^|\.)bilibili\.com$/i.test(location.hostname);
-	}
-	function gmGetJson(url) {
-		return new Promise((resolve, reject) => {
-			if (typeof GM_xmlhttpRequest === "function") {
-				GM_xmlhttpRequest({
-					method: "GET",
-					url,
-					timeout: 1e4,
-					onload: (res) => {
-						try {
-							resolve(JSON.parse(res.responseText));
-						} catch (err) {
-							reject(err);
-						}
-					},
-					onerror: () => reject(new Error("网络错误")),
-					ontimeout: () => reject(new Error("请求超时"))
-				});
-				return;
-			}
-			fetch(url, { credentials: "include" }).then((res) => res.json()).then(resolve, reject);
-		});
-	}
-	var inflight = new Map();
-	var failedAt = new Map();
-	async function fetchFace(mid) {
-		if (!onBilibili()) return null;
-		const pending = inflight.get(mid);
-		if (pending) return pending;
-		const lastFail = failedAt.get(mid);
-		if (lastFail && Date.now() - lastFail < FAIL_COOLDOWN_MS) return null;
-		const task = (async () => {
-			try {
-				const json = await gmGetJson(`${CARD_API}?mid=${encodeURIComponent(mid)}`);
-				if (json?.code !== 0) throw new Error(`接口返回 code=${json?.code}`);
-				const face = typeof json.data?.face === "string" ? json.data.face : "";
-				if (!/^https?:\/\//.test(face)) throw new Error("返回无头像");
-				failedAt.delete(mid);
-				return face;
-			} catch (err) {
-				failedAt.set(mid, Date.now());
-				log(`头像补全失败 mid=${mid}`, err);
-				return null;
-			} finally {
-				inflight.delete(mid);
-			}
-		})();
-		inflight.set(mid, task);
-		return task;
-	}
-	var queue = [];
-	var draining = false;
-	var pendingPatch = new Map();
-	function shouldBackfill(mid) {
-		const rec = store.get(mid);
-		if (!rec || rec.faceSnapshot) return false;
-		if (inflight.has(mid)) return false;
-		const lastFail = failedAt.get(mid);
-		return !(lastFail && Date.now() - lastFail < FAIL_COOLDOWN_MS);
-	}
-	function requestFaceBackfill(mids) {
-		if (!onBilibili()) return;
-		let added = false;
-		for (const mid of mids) {
-			if (!shouldBackfill(mid)) continue;
-			if (!queue.includes(mid)) {
-				queue.push(mid);
-				added = true;
-			}
-		}
-		if (added) drainQueue();
-	}
-	async function drainQueue() {
-		if (draining) return;
-		draining = true;
-		try {
-			while (queue.length) {
-				const mid = queue.shift();
-				const face = await fetchFace(mid);
-				if (face) pendingPatch.set(mid, face);
-				if (queue.length) await new Promise((r) => setTimeout(r, QUEUE_GAP_MS));
-			}
-		} finally {
-			draining = false;
-		}
-		flushPendingPatch();
-	}
-	function flushPendingPatch() {
-		if (!pendingPatch.size) return;
-		const map = new Map(pendingPatch);
-		pendingPatch.clear();
-		store.patchFaces(map);
-	}
-	var seenFaces = new Map();
-	var seenTimer = null;
-	function initFaceBackfill() {
-		on("face-seen", (payload) => {
-			const mid = payload?.mid;
-			if (typeof mid !== "string") return;
-			if (!shouldBackfill(mid)) return;
-			const face = faceOf(mid);
-			if (!face) return;
-			seenFaces.set(mid, face);
-			if (seenTimer !== null) return;
-			seenTimer = setTimeout(() => {
-				seenTimer = null;
-				const map = new Map(seenFaces);
-				seenFaces.clear();
-				store.patchFaces(map);
-			}, SEEN_FLUSH_MS);
-		});
-	}
 	var SCENE_LABELS = {
 		videoUp: "视频 UP 主",
 		comment: "评论区",
@@ -4142,6 +4000,42 @@
 	var unbindBus = null;
 	var prevOverflow = "";
 	var keyHandler = null;
+	var renderDebounce = null;
+	var scrollSilence = null;
+	var userScrolling = false;
+	var renderPending = false;
+	function clearRenderSchedule() {
+		if (renderDebounce !== null) window.clearTimeout(renderDebounce);
+		if (scrollSilence !== null) window.clearTimeout(scrollSilence);
+		renderDebounce = null;
+		scrollSilence = null;
+		userScrolling = false;
+		renderPending = false;
+	}
+	function scheduleDataRender() {
+		if (renderDebounce !== null) window.clearTimeout(renderDebounce);
+		renderDebounce = window.setTimeout(() => {
+			renderDebounce = null;
+			if (userScrolling) {
+				renderPending = true;
+				return;
+			}
+			renderPending = false;
+			renderAll();
+		}, 150);
+	}
+	function onPanelScroll() {
+		userScrolling = true;
+		if (scrollSilence !== null) window.clearTimeout(scrollSilence);
+		scrollSilence = window.setTimeout(() => {
+			userScrolling = false;
+			scrollSilence = null;
+			if (renderPending && refs) {
+				renderPending = false;
+				renderAll();
+			}
+		}, 200);
+	}
 	function btn(label, className, onClick) {
 		const b = h("button", className, label);
 		b.type = "button";
@@ -4310,19 +4204,6 @@
 			tr.appendChild(tdCheck);
 			const tdUser = document.createElement("td");
 			const userLine = h("div", "brmk-cell-main");
-			const avatar = h("img");
-			avatar.width = 20;
-			avatar.height = 20;
-			avatar.style.borderRadius = "50%";
-			avatar.style.verticalAlign = "-5px";
-			avatar.style.marginRight = "6px";
-			avatar.style.objectFit = "cover";
-			avatar.alt = "";
-			if (rec.faceSnapshot) {
-				avatar.src = rec.faceSnapshot;
-				avatar.addEventListener("error", () => avatar.remove());
-			} else avatar.style.display = "none";
-			userLine.appendChild(avatar);
 			userLine.appendChild(document.createTextNode(rec.nickSnapshot || "（无昵称快照）"));
 			const currentNick = nickCache.get(rec.mid);
 			if (currentNick && rec.nickSnapshot && currentNick !== rec.nickSnapshot) {
@@ -4417,7 +4298,6 @@
 		}
 		renderPager(r, list.length, totalPages);
 		renderBatchBar(r);
-		requestFaceBackfill(rows.filter((rec) => !rec.faceSnapshot).map((rec) => rec.mid));
 	}
 	function renderPager(r, total, totalPages) {
 		r.pager.textContent = "";
@@ -4596,6 +4476,12 @@
 			applyPalette();
 		});
 		managerSec.appendChild(fieldRow("管理页面板配色", "不影响页面内备注标签", themeSelect));
+		managerSec.appendChild(fieldRow("遮罩背景模糊", "打开管理页时模糊背后页面，更沉浸但更耗性能", switchEl(settings.manager.maskBlur, (next) => {
+			updateSettings((s) => {
+				s.manager.maskBlur = next;
+			});
+			applyPalette();
+		})));
 		managerSec.appendChild(fieldRow("面板层级 z-index", "与其他脚本冲突时调整", numberInput(settings.manager.zIndex, 1e3, 2147483e3, (n) => {
 			updateSettings((s) => {
 				s.manager.zIndex = n;
@@ -4672,6 +4558,8 @@
 		if (!r) return;
 		const s = getSettings();
 		r.root.style.zIndex = String(s.manager.zIndex);
+		if (s.manager.maskBlur) r.root.setAttribute("data-mask-blur", "1");
+		else r.root.removeAttribute("data-mask-blur");
 		const p = managerPalette();
 		const set = (name, value) => r.root.style.setProperty(name, value);
 		set("--brmk-bg", p.bg);
@@ -5126,14 +5014,14 @@
 		state.selected.clear();
 		document.body.appendChild(r.root);
 		applyPalette();
+		r.panel.addEventListener("scroll", onPanelScroll, true);
 		bind(r);
 		renderAll();
 		prevOverflow = document.body.style.overflow;
 		document.body.style.overflow = "hidden";
 		unbindBus = on("data-changed", () => {
 			if (!refs) return;
-			if (state.tab === "settings") renderAll();
-			else renderAll();
+			scheduleDataRender();
 		});
 		const unbindTheme = on("theme-changed", () => applyPalette());
 		const prevUnbind = unbindBus;
@@ -5147,6 +5035,8 @@
 		if (!refs) return;
 		const r = refs;
 		refs = null;
+		clearRenderSchedule();
+		r.panel.removeEventListener("scroll", onPanelScroll, true);
 		hideSub();
 		r.root.remove();
 		document.body.style.overflow = prevOverflow;
@@ -5485,7 +5375,6 @@
 		if (started) return;
 		started = true;
 		store.load();
-		initFaceBackfill();
 		refreshTheme();
 		installStyles();
 		themeCleanup = watchTheme(() => {

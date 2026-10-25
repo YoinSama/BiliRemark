@@ -50,6 +50,8 @@ export interface ManagerSettings {
   pageSize: number
   theme: 'auto' | 'dark' | 'light'
   zIndex: number
+  /** 遮罩背景模糊（backdrop-filter）：默认关，真机 GPU 合成开销换视觉沉浸 */
+  maskBlur: boolean
 }
 
 export interface BackupSettings {

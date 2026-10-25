@@ -211,28 +211,6 @@ class RemarkStore {
     return merged
   }
 
-  /**
-   * 仅补全缺失的头像快照（旧数据回填）：不算用户编辑，不改动记录的 updatedAt，
-   * 一次落盘 + 一次 data-changed，避免逐条 upsert 时管理页反复整页重渲染。
-   */
-  patchFaces(faces: Map<string, string>): string[] {
-    const patched: string[] = []
-    for (const [mid, face] of faces) {
-      const url = String(face ?? '').trim()
-      if (!/^https?:\/\//.test(url)) continue
-      const rec = this.data.users[mid]
-      if (!rec || rec.faceSnapshot) continue
-      rec.faceSnapshot = url.slice(0, 500)
-      patched.push(mid)
-    }
-    if (!patched.length) return []
-    this.data.updatedAt = now()
-    this.dirty = true
-    this.persistSoon()
-    emit('data-changed', { reason: 'patch-faces', mids: patched })
-    return patched
-  }
-
   remove(mid: string): UserRecord | null {
     const rec = this.data.users[mid]
     if (!rec) return null

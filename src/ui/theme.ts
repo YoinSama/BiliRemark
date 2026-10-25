@@ -303,9 +303,11 @@ function buildCss(theme: ThemeInfo): string {
   --brmk-bg:${p.bg}; --brmk-bg2:${p.bg2}; --brmk-bg3:${p.bg3}; --brmk-fg:${p.fg}; --brmk-fg2:${p.fg2};
   --brmk-border:${p.border}; --brmk-shadow:${p.shadow}; --brmk-accent:${p.accent};
   --brmk-accent-weak:${p.accentWeak}; --brmk-accent-border:${p.accentBorder};
-  background:${p.overlay}; backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+  background:${p.overlay};
   animation:brmk-fade .16s ease-out;
 }
+/* 遮罩模糊改为可选（v1.7.3 默认关）：backdrop-filter 全屏重采样在真机 GPU 上开销可观 */
+#brmk-manager[data-mask-blur="1"]{ backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
 @keyframes brmk-fade{ from{opacity:0} to{opacity:1} }
 #brmk-manager *{ box-sizing:border-box; font-family:inherit; }
 #brmk-manager .brmk-panel{
@@ -355,7 +357,7 @@ function buildCss(theme: ThemeInfo): string {
   background:var(--brmk-bg2); color:var(--brmk-fg); outline:none;
 }
 #brmk-manager .brmk-spacer{ flex:1; }
-#brmk-manager .brmk-body{ flex:1 1 auto; overflow:auto; margin:0 18px; border:1px solid var(--brmk-border); border-radius:8px; }
+#brmk-manager .brmk-body{ flex:1 1 auto; overflow:auto; overscroll-behavior:contain; margin:0 18px; border:1px solid var(--brmk-border); border-radius:8px; }
 #brmk-manager table{ width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
 #brmk-manager thead th{
   position:sticky; top:0; z-index:2; background:var(--brmk-bg2); color:var(--brmk-fg2);
@@ -397,7 +399,7 @@ function buildCss(theme: ThemeInfo): string {
 #brmk-manager .brmk-empty b{ display:block; font-size:15px; color:var(--brmk-fg); margin-bottom:6px; }
 
 /* 设置页 */
-#brmk-manager .brmk-settings{ flex:1 1 auto; overflow:auto; padding:14px 18px 24px; }
+#brmk-manager .brmk-settings{ flex:1 1 auto; overflow:auto; overscroll-behavior:contain; padding:14px 18px 24px; }
 #brmk-manager .brmk-sec{ margin-bottom:18px; border:1px solid var(--brmk-border); border-radius:8px; overflow:hidden; }
 #brmk-manager .brmk-sec-head{ padding:10px 12px; background:var(--brmk-bg2); font-size:13px; font-weight:600; border-bottom:1px solid var(--brmk-border); }
 #brmk-manager .brmk-row{

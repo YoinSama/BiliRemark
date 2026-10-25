@@ -38,7 +38,6 @@ export default defineConfig({
         'run-at': 'document-idle',
         'updateURL': 'https://raw.githubusercontent.com/YoinSama/BiliRemark/main/dist/BiliRemark.user.js',
         'downloadURL': 'https://raw.githubusercontent.com/YoinSama/BiliRemark/main/dist/BiliRemark.user.js',
-        'connect': ['api.bilibili.com'],
         grant: [
           'GM_getValue',
           'GM_setValue',
@@ -46,7 +45,6 @@ export default defineConfig({
           'GM_registerMenuCommand',
           'GM_setClipboard',
           'GM_info',
-          'GM_xmlhttpRequest',
           'unsafeWindow',
         ],
       },
