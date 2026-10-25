@@ -7,7 +7,6 @@
  * （实测把 <i> appendChild 到一段空白文本节点，抛 HierarchyRequestError，
  * 整条更新链中断 → 评论区 / 推荐封面 / 头像全部不挂载）。浮层方案从根上避开这类风险。
  */
-import { getSettings } from '../core/config'
 
 export type Slot = 'badge' | 'pencil'
 
@@ -20,6 +19,15 @@ const MIN_W = 60
 const INLINE_MIN_W = 34
 /** 离视口边缘的安全距离 */
 const MARGIN = 4
+/**
+ * 浮层层级：必须压在正文之上、B 站自家 UI 之下（2026-10-25 真机探针 probe-nav-z/scroll/midz）：
+ * 空间页吸顶导航 div.nav-bar z=99（nav-bar__main 的层叠上下文）、全局顶栏
+ * .bili-header__bar z=1002（www/t fixed、space absolute）——层取 98 恰好整条线以下，
+ * 徽标滚到导航栏底下时被盖住（主人要求的视觉逻辑）；10≤z≤98 区间只有播放器内部
+ * 元素（bpx-player ≤91，与昵称行永不共处），正文没有更低的层需要避让。
+ * 不再跟 manager.zIndex 挂钩：那是管理面板（遮罩级 UI）的层级，徽标是正文级标注。
+ */
+const LAYER_Z = 98
 /** 布局会随图片加载 / 异步渲染变化，没有 mutation 也得重新定位 */
 const POLL_MS = 200
 
@@ -48,7 +56,7 @@ function ensureLayer(): HTMLElement | null {
     el.id = 'brmk-layer'
     document.body.appendChild(el)
   }
-  el.style.zIndex = String(Math.max(1000, getSettings().manager.zIndex - 2))
+  el.style.zIndex = String(LAYER_Z)
   layer = el
   return layer
 }
@@ -345,7 +353,10 @@ function place(anchor: Element, el: HTMLElement, vw: number, vh: number, lrx: nu
     y = clamp(y, MARGIN, vh - MARGIN * 2 - h)
   } else {
     x = Math.max(MARGIN, x)
-    y = clamp(y, MARGIN, vh - MARGIN * 2 - h)
+    // y 绝不夹进视口：夹了会把「锚点半出视口」的徽标硬推进视口内，恰好发生在
+    // 顶/底临界滚动窗口（200ms 轮询每次都重算）——徽标脱离锚点往下挪、压到下一行
+    // （主人 2026-10-25 报障：视频页 UP 备注撞签名行）。正确行为是贴死锚点随页面
+    // 滚出去，滚出视口由 refreshVisibility 隐藏；被顶栏盖住由层 z-index 负责。
   }
 
   // 定位必须走独立的 translate 属性而不是 transform：.brmk-badge 的 transition

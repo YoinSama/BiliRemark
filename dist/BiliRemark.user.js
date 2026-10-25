@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliRemark
 // @namespace    https://github.com/YoinSama/BiliRemark
-// @version      1.7.3
+// @version      1.7.4
 // @author       Yoin
 // @description  B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。
 // @license      MIT
@@ -24,7 +24,7 @@
 
 (function() {
 	"use strict";
-	var VERSION = "1.7.3";
+	var VERSION = "1.7.4";
 	var STORAGE = {
 		data: "brmk.data.v1",
 		settings: "brmk.settings.v1",
@@ -1387,6 +1387,7 @@
 	var MIN_W = 60;
 	var INLINE_MIN_W = 34;
 	var MARGIN = 4;
+	var LAYER_Z = 98;
 	var POLL_MS = 200;
 	var byAnchor = new Map();
 	var byEl = new WeakMap();
@@ -1405,7 +1406,7 @@
 			el.id = "brmk-layer";
 			document.body.appendChild(el);
 		}
-		el.style.zIndex = String(Math.max(1e3, getSettings().manager.zIndex - 2));
+		el.style.zIndex = String(LAYER_Z);
 		layer = el;
 		return layer;
 	}
@@ -1649,10 +1650,7 @@
 		if (!fits) {
 			x = clamp(x, MARGIN, vw - 8 - width);
 			y = clamp(y, MARGIN, vh - 8 - h);
-		} else {
-			x = Math.max(MARGIN, x);
-			y = clamp(y, MARGIN, vh - 8 - h);
-		}
+		} else x = Math.max(MARGIN, x);
 		const docX = x + window.scrollX;
 		const docY = y + window.scrollY;
 		const sig = `${docX},${docY},${width}`;
@@ -1852,7 +1850,7 @@
    层宽为 0 会把徽标塌缩成一个点。height:0 不参与布局，仅作定位原点。 */
 #brmk-layer{
   position:absolute; left:0; top:0; width:100%; height:0;
-  z-index:99997; pointer-events:none; overflow:visible;
+  z-index:98; pointer-events:none; overflow:visible;
   contain:layout style;
 }
 /* portal 用 translate 属性定位（不用 transform，避免被 .brmk-badge 的 transform 过渡拖成飞入/弹跳） */
