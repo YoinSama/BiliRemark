@@ -225,7 +225,8 @@ function bindDynPencil(anchor: Element, mid: string, nickname: string): void {
   dynLazyBound.add(anchor)
   anchor.addEventListener('mouseenter', () => {
     if (!anchor.isConnected) return
-    ensurePencil(anchor, mid, nickname, 'dynamic')
+    // 第 5 参 = placeInline：与徽标同款行内选址（贴文字右缘，不落下方压发布时间）
+    ensurePencil(anchor, mid, nickname, 'dynamic', true)
     showPencil(anchor)
   })
 }
@@ -280,7 +281,10 @@ function pickDynTargets(): { targets: DynamicTarget[]; hits: { selector: string;
 }
 
 function injectDyn(targets: DynamicTarget[]): number {
-  const opts = { ...badgeOptions(), scene: 'dynamic' as const }
+  // placeInline（S7 relation 同款）：真机 .bili-dyn-title__text 是块级全宽元素（rect = 标题列宽，
+  // 与文字长度无关），portal 常规右侧选址无空位会退到「父容器下方」压住发布时间行；
+  // 行内选址用 Range 量昵称文字本体右缘 + 6px、与文字行中线对齐、宽度收敛标题列右缘、永不落下方。
+  const opts = { ...badgeOptions(), scene: 'dynamic' as const, placeInline: true }
   let injected = 0
 
   for (const target of targets) {

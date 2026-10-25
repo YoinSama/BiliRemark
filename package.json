@@ -1,7 +1,7 @@
 {
   "name": "bili-remark",
   "private": true,
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "B 站网页端本地用户备注油猴脚本",
   "type": "module",
   "scripts": {

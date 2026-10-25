@@ -189,6 +189,53 @@ function lastTextRect(anchor: Element): { right: number; top: number; height: nu
 }
 
 /**
+ * 行内挂法的右界：默认父容器右缘−2；父容器若是「收缩到内容宽」的列（dyn 标题列：
+ * 名字多宽列就多宽，右缘恒贴文字、父容器内永无行内空间），向上找真正有留白、且垂直
+ * 方向仍包着锚点行文字的行级祖先（≤3 层，防爬到卡片/列表级把徽标放飞到容器右缘），
+ * 并以该祖先内锚点行右侧第一个原生元素左缘−GAP 为界（关注按钮 / 装扮挂件自动避让）。
+ */
+function inlineBoundRight(
+  anchor: Element,
+  parent: Element,
+  lineTop: number,
+  lineBottom: number,
+  x: number,
+): number {
+  /** host 内锚点行右侧第一个原生元素左缘−GAP；obstacle=行上真有原生元素（对所有更外层都成立） */
+  const rightSib = (host: Element): { bound: number; obstacle: boolean } => {
+    let bound = host.getBoundingClientRect().right - 2
+    let obstacle = false
+    let n = 0
+    for (const sib of Array.from(host.children)) {
+      if (n++ >= 12 || sib.contains(anchor) || anchor.contains(sib)) continue
+      const sr = sib.getBoundingClientRect()
+      if (!sr.width && !sr.height) continue
+      if (sr.left >= x - 1 && sr.top < lineBottom - 1 && sr.bottom > lineTop + 1) {
+        bound = Math.min(bound, sr.left - GAP)
+        obstacle = true
+      }
+    }
+    return { bound, obstacle }
+  }
+
+  let { bound, obstacle } = rightSib(parent)
+  if (obstacle || bound - x >= INLINE_MIN_W) return bound
+  let node: Element | null = parent
+  for (let i = 0; i < 3 && node; i++) {
+    node = node.parentElement
+    if (!node) break
+    const nr = node.getBoundingClientRect()
+    // 只接受行级祖先（垂直方向包住锚点行文字），否则继续上爬
+    if (nr.top > lineTop + 2 || nr.bottom < lineBottom - 2) continue
+    // 障碍一旦出现立即定界：更外层看不见嵌套在中间层里的右缘元素，继续爬会放飞
+    const res = rightSib(node)
+    if (res.obstacle) return res.bound
+    if (res.bound - x >= INLINE_MIN_W) return res.bound
+  }
+  return bound
+}
+
+/**
  * 选址优先级：
  *   0a. 锚点行下方（仅 data-brmk-place="below" 的徽标，如首页/搜索卡片：与锚点行
  *       左缘对齐、宽度受锚点父容器约束——卡片作者行是卡片信息区的整行，下方是留白）
@@ -256,9 +303,9 @@ function place(anchor: Element, el: HTMLElement, vw: number, vh: number, lrx: nu
     const text = lastTextRect(anchor) ?? { right: r.right, top: r.top, height: r.height }
     x = Math.round(text.right + GAP)
     y = Math.round(text.top + (text.height - h) / 2)
-    maxW = Math.round(pr!.right - 2) - x
+    maxW = inlineBoundRight(anchor, parent!, text.top, text.top + text.height, x) - x
     if (maxW < INLINE_MIN_W) {
-      // 极端满行（末行文字占满列宽）：右对齐到父容器右缘，有界贴行尾，绝不落下方
+      // 极端满行（找不到任何有留白的行级祖先）：右对齐到父容器右缘，有界贴行尾，绝不落下方
       maxW = INLINE_MIN_W
       x = Math.round(pr!.right - 2) - maxW
     }

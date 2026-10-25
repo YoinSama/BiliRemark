@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliRemark
 // @namespace    https://github.com/YoinSama/BiliRemark
-// @version      1.7.0
+// @version      1.7.1
 // @author       Yoin
 // @description  B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。
 // @license      MIT
@@ -26,7 +26,7 @@
 
 (function() {
 	"use strict";
-	var VERSION = "1.7.0";
+	var VERSION = "1.7.1";
 	var STORAGE = {
 		data: "brmk.data.v1",
 		settings: "brmk.settings.v1",
@@ -1543,6 +1543,39 @@
 			return null;
 		}
 	}
+	function inlineBoundRight(anchor, parent, lineTop, lineBottom, x) {
+		const rightSib = (host) => {
+			let bound = host.getBoundingClientRect().right - 2;
+			let obstacle = false;
+			let n = 0;
+			for (const sib of Array.from(host.children)) {
+				if (n++ >= 12 || sib.contains(anchor) || anchor.contains(sib)) continue;
+				const sr = sib.getBoundingClientRect();
+				if (!sr.width && !sr.height) continue;
+				if (sr.left >= x - 1 && sr.top < lineBottom - 1 && sr.bottom > lineTop + 1) {
+					bound = Math.min(bound, sr.left - GAP);
+					obstacle = true;
+				}
+			}
+			return {
+				bound,
+				obstacle
+			};
+		};
+		let { bound, obstacle } = rightSib(parent);
+		if (obstacle || bound - x >= INLINE_MIN_W) return bound;
+		let node = parent;
+		for (let i = 0; i < 3 && node; i++) {
+			node = node.parentElement;
+			if (!node) break;
+			const nr = node.getBoundingClientRect();
+			if (nr.top > lineTop + 2 || nr.bottom < lineBottom - 2) continue;
+			const res = rightSib(node);
+			if (res.obstacle) return res.bound;
+			if (res.bound - x >= INLINE_MIN_W) return res.bound;
+		}
+		return bound;
+	}
 	function place(anchor, el, vw, vh, lrx, lry) {
 		const r = anchor.getBoundingClientRect();
 		if (!r.width && !r.height) {
@@ -1606,7 +1639,7 @@
 			};
 			x = Math.round(text.right + GAP);
 			y = Math.round(text.top + (text.height - h) / 2);
-			maxW = Math.round(pr.right - 2) - x;
+			maxW = inlineBoundRight(anchor, parent, text.top, text.top + text.height, x) - x;
 			if (maxW < INLINE_MIN_W) {
 				maxW = INLINE_MIN_W;
 				x = Math.round(pr.right - 2) - maxW;
@@ -3056,7 +3089,7 @@
 		dynLazyBound.add(anchor);
 		anchor.addEventListener("mouseenter", () => {
 			if (!anchor.isConnected) return;
-			ensurePencil(anchor, mid, nickname, "dynamic");
+			ensurePencil(anchor, mid, nickname, "dynamic", true);
 			showPencil(anchor);
 		});
 	}
@@ -3117,7 +3150,8 @@
 	function injectDyn(targets) {
 		const opts = {
 			...badgeOptions(),
-			scene: "dynamic"
+			scene: "dynamic",
+			placeInline: true
 		};
 		let injected = 0;
 		for (const target of targets) {
