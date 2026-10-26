@@ -37,6 +37,30 @@ const pencilBound = new WeakSet<Element>()
 const hideTimers = new WeakMap<Element, number>()
 const HIDE_DELAY = 220
 
+/**
+ * 已终态锚点登记（代际 WeakMap）：已挂 portal 徽标 / 已绑按需铅笔的锚点，扫描时跳过其
+ * isVisible 布局读与 mid 解析（长列表页每轮巡检省掉上百次强制布局查询）。
+ * - 代际失效：data / settings / theme 任一变化会改变「该锚点什么表现」→ settleGen+1，
+ *   全部旧登记作废、全量重估（WeakMap 无法 clear，用代际号比对实现 O(1) 重置）。
+ * - 只登记 portal 挂法的锚点：浮层在我们自己的 #brmk-layer 里，B 站重渲染 wipe 不掉；
+ *   内联进 B 站容器的徽标（评论区 / 私信行 / 侧栏行）会被页面重渲染挤掉，必须每轮
+ *   巡检重申，一律不登记。锚点元素被页面替换时是新对象，天然不在登记里。
+ */
+let settleGen = 0
+const settledAt = new WeakMap<Element, number>()
+
+export function markSettled(anchor: Element): void {
+  settledAt.set(anchor, settleGen)
+}
+
+export function isSettled(anchor: Element): boolean {
+  return settledAt.get(anchor) === settleGen
+}
+
+export function resetSettledAnchors(): void {
+  settleGen++
+}
+
 function buildBadgeContent(badge: HTMLElement, record: UserRecord, options: BadgeOptions): void {
   badge.textContent = ''
   if (options.showColorDot) {

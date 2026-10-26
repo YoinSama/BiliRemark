@@ -5,7 +5,7 @@ import type { Settings } from './types'
  * vite.config.ts 构建时会校验此处与 package.json 的 version 一致，不一致直接构建失败。
  * 发版流程：改 package.json 的 version → 构建报错 → 把这里改成同一个值 → 重新构建。
  */
-export const VERSION = '1.7.5'
+export const VERSION = '1.7.6'
 
 export const STORAGE = {
   data: 'brmk.data.v1',
@@ -19,6 +19,8 @@ export const LIMITS = {
   tag: 16,
   tags: 5,
   note: 500,
+  /** firstSeen.url 截断上限（导入面可塞任意长字符串，不能让单字段撑爆存储） */
+  firstSeenUrl: 500,
   records: 5000,
   /** 触发告警的估算占用（字节），真上限实测前先保守取值 */
   warnBytes: 4 * 1024 * 1024,

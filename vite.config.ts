@@ -41,6 +41,8 @@ export default defineConfig({
         grant: [
           'GM_getValue',
           'GM_setValue',
+          'GM_deleteValue',
+          'GM_listValues',
           'GM_addValueChangeListener',
           'GM_registerMenuCommand',
           'GM_setClipboard',

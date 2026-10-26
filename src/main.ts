@@ -16,7 +16,7 @@ import { guard, log, warn } from './util/log'
 import { openManager, closeManager, isManagerOpen, toggleManager } from './ui/manager'
 import { mountFab } from './ui/floating'
 import { openDoctor, closeDoctor, setDoctorRescan, isDoctorOpen, doctorEnabled } from './dev/doctor'
-import { badgeCount, clearAll, pruneBadges } from './ui/badge'
+import { badgeCount, clearAll, pruneBadges, resetSettledAnchors } from './ui/badge'
 import { toast } from './ui/toast'
 
 const APP_NS = '__biliRemark__'
@@ -153,6 +153,9 @@ function onRouteChange(): void {
   log('路由变化', location.href)
   cancelCommentBatch()
   clearInjected()
+  // clearAll 撤掉了全部徽标/铅笔，但 SPA 换页可能复用同一批锚点元素——终态登记必须整体失效，
+  // 否则复用锚点被认为「已处理」而不再补挂
+  resetSettledAnchors()
   // 离开空间页时立刻移除模块，避免残留上一个用户的备注；空间页内切 tab 交给扫描幂等处理
   if (!isSpacePage()) clearSpaceAside()
   closeDoctor()
@@ -285,6 +288,8 @@ function boot(): void {
   installStyles()
 
   themeCleanup = watchTheme(() => {
+    // 主题色参与徽标内容签名（badgeSignature），变了的徽标要重建——终态登记一并失效
+    resetSettledAnchors()
     installStyles(refreshTheme())
     emit('theme-changed')
     log('主题已更新')
@@ -296,9 +301,15 @@ function boot(): void {
   bindHotkey()
   setDoctorRescan(() => scanNow())
 
-  on('data-changed', () => scanNow())
+  // 备注/设置变化会改变「已终态锚点」该有的表现（徽标↔铅笔互换、内容签名变化），
+  // 代际失效后全量重估；扫描走既有去抖（保存一条备注不再同步全页扫一轮）
+  on('data-changed', () => {
+    resetSettledAnchors()
+    scheduleScan()
+  })
 
   on('settings-changed', () => {
+    resetSettledAnchors()
     installStyles(refreshTheme())
     scanNow()
   })

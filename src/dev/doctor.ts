@@ -14,10 +14,9 @@ export function setDoctorRescan(fn: () => void): void {
   rescan = fn
 }
 
-function buildReport(): string {
+function buildReport(stats: ReturnType<typeof store.stats>): string {
   const lines: string[] = []
   const theme = getTheme()
-  const stats = store.stats()
   lines.push(`URL: ${location.href}`)
   lines.push(`页面类型: ${document.title}`)
   lines.push(`主题: dark=${theme.dark} evolved=${theme.evolved} color=${theme.color}`)
@@ -69,7 +68,7 @@ export function openDoctor(): void {
     el.appendChild(h('div', 'brmk-doc-row', `${diag.label}：mid ${diag.midResolved} / 注入 ${diag.injected}`))
   }
 
-  const pre = h('pre', '', buildReport())
+  const pre = h('pre', '', buildReport(stats))
   el.appendChild(pre)
 
   const actions = h('div')
@@ -87,8 +86,8 @@ export function openDoctor(): void {
   copy.type = 'button'
   copy.addEventListener('click', () => {
     try {
-      if (typeof GM_setClipboard === 'function') GM_setClipboard(buildReport(), 'text')
-      else void navigator.clipboard?.writeText(buildReport())
+      if (typeof GM_setClipboard === 'function') GM_setClipboard(buildReport(store.stats()), 'text')
+      else void navigator.clipboard?.writeText(buildReport(store.stats()))
       toast('诊断信息已复制')
     } catch {
       toast('复制失败')

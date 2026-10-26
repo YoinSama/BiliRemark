@@ -2,7 +2,7 @@ import { getSettings } from '../core/config'
 import { resolveFromElement, snapshotNickname } from '../core/midResolver'
 import { faceOf, rememberFace, rememberNick, setDiagnostic, type SceneDiagnostic } from '../core/runtime'
 import { store } from '../core/store'
-import { badgeOptions, clearPencilsOfScene, ensurePencil, renderBadge, renderInlineBadge, showPencil } from '../ui/badge'
+import { badgeOptions, clearPencilsOfScene, ensurePencil, isSettled, markSettled, renderBadge, renderInlineBadge, showPencil } from '../ui/badge'
 import { isVisible, qs, qsa } from '../util/dom'
 
 /**
@@ -86,19 +86,23 @@ const rowFirstSeen = new WeakMap<Element, number>()
 const imInline = new Set<HTMLElement>()
 
 function pickTargets(): { targets: ImTarget[]; hits: { selector: string; hits: number }[] } {
-  const rows = qsa(ROW_SELECTOR).filter((el) => isRowContainer(el) && isVisible(el))
+  const allRows = qsa(ROW_SELECTOR)
   const contacts = qsa(CONTACT_SELECTOR).filter((el) => isVisible(el))
   const hits = [
-    { selector: ROW_SELECTOR, hits: rows.length },
+    { selector: ROW_SELECTOR, hits: allRows.length },
     { selector: NAME_SELECTOR, hits: qsa(NAME_SELECTOR).length },
     { selector: CONTACT_SELECTOR, hits: contacts.length },
   ]
 
   const targets: ImTarget[] = []
-  for (const row of rows) {
+  for (const row of allRows) {
+    if (!isRowContainer(row)) continue
     const mid = midFromRow(row)
     if (!mid) continue
     const anchor = anchorOfRow(row)
+    // 已终态锚点（按需铅笔 / portal 徽标）跳过 isVisible 布局读；内联徽标行不登记终态，天然不命中
+    if (isSettled(anchor)) continue
+    if (!isVisible(row)) continue
     // 同一行嵌套链只保留一个锚点（anchorOfRow 已定），跨行/跨区域不同锚点各自保留
     if (targets.some((t) => t.mid === mid && (t.anchor.contains(anchor) || anchor.contains(t.anchor)))) continue
     targets.push({ anchor, mid, nickname: snapshotNickname(anchor), face: faceFromRow(row), lazy: true })
@@ -115,11 +119,12 @@ function pickTargets(): { targets: ImTarget[]; hits: { selector: string; hits: n
 
   // 行内链接兜底（若 B 站改版恢复 <a>，href 形态由 resolveFromElement 现行正则吃掉；
   // data-id 链路失败且无链接的行自然跳过——宁缺毋滥）
-  for (const row of rows) {
-    if (midFromRow(row)) continue
-    const resolved = resolveFromElement(anchorOfRow(row))
+  for (const row of allRows) {
+    if (!isRowContainer(row) || midFromRow(row)) continue
+    const anchor = anchorOfRow(row)
+    if (isSettled(anchor)) continue
+    const resolved = resolveFromElement(anchor)
     if (resolved && !targets.some((t) => t.mid === resolved.mid)) {
-      const anchor = anchorOfRow(row)
       targets.push({ anchor, mid: resolved.mid, nickname: snapshotNickname(anchor), face: faceFromRow(row), lazy: true })
     }
   }
@@ -150,20 +155,31 @@ function inject(targets: ImTarget[]): number {
     if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face)
     const record = store.get(target.mid)
     if (!record) {
-      if (target.lazy) bindLazyPencil(target.anchor, target.mid, target.nickname)
-      else ensurePencil(target.anchor, target.mid, target.nickname, 'message')
+      if (target.lazy) {
+        bindLazyPencil(target.anchor, target.mid, target.nickname)
+        markSettled(target.anchor)
+      } else {
+        ensurePencil(target.anchor, target.mid, target.nickname, 'message')
+      }
       continue
     }
     if (!target.lazy) {
       // 聊天头部：portal 贴名右侧（空间充裕，保留 tag），维持 v1.5 形态
-      if (renderBadge(target.anchor, record, headerOpts)) injected++
+      if (renderBadge(target.anchor, record, headerOpts)) {
+        markSettled(target.anchor)
+        injected++
+      }
       continue
     }
     // 会话行：内联进 Title（锚点 = 昵称元素；锚点降级为行容器时不内联，退 portal 保底）
     if (!target.anchor.parentElement?.className.includes('SessionItem__Title')) {
-      if (renderBadge(target.anchor, record, rowOpts)) injected++
+      if (renderBadge(target.anchor, record, rowOpts)) {
+        markSettled(target.anchor)
+        injected++
+      }
       continue
     }
+    // 内联徽标进 B 站容器（Vue 重渲染可能 wipe），不登记终态：年龄门控 + 巡检每轮重申
     const born = rowFirstSeen.get(target.anchor)
     if (born === undefined) {
       rowFirstSeen.set(target.anchor, Date.now())
@@ -194,7 +210,7 @@ export function scanIm(): SceneDiagnostic {
     injected,
     notes: [],
   }
-  if (!targets.length) {
+  if (!hits[0].hits && !hits[2].hits) {
     diag.notes.push('未找到会话行/联系人锚点（列表为空、未打开会话、结构已变或行 data-id 非 contact_ 前缀）')
   }
   setDiagnostic(diag)

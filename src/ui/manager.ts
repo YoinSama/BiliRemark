@@ -204,8 +204,9 @@ function pageSize(): number {
   return Math.max(10, getSettings().manager.pageSize)
 }
 
-function renderStats(r: Refs): void {
-  const stats = store.stats()
+type StoreStats = ReturnType<typeof store.stats>
+
+function renderStats(r: Refs, stats: StoreStats): void {
   const settings = getSettings()
   const days = daysSince(settings.backup.lastExportAt)
   r.countBadge.textContent = String(stats.count)
@@ -239,10 +240,9 @@ function renderStats(r: Refs): void {
   }
 }
 
-function renderWarn(r: Refs): void {
+function renderWarn(r: Refs, stats: StoreStats): void {
   r.warn.textContent = ''
   const messages: string[] = []
-  const stats = store.stats()
   const settings = getSettings()
 
   if (store.lastError) messages.push(store.lastError)
@@ -260,11 +260,11 @@ function renderWarn(r: Refs): void {
   for (const msg of messages) r.warn.appendChild(h('div', 'brmk-warn', msg))
 }
 
-function renderTagOptions(r: Refs): void {
+function renderTagOptions(r: Refs, stats: StoreStats): void {
   const current = state.tag
   r.tagSelect.textContent = ''
   r.tagSelect.appendChild(option('', '全部标签'))
-  const tags = store.stats().tags
+  const tags = stats.tags
   for (const t of tags) r.tagSelect.appendChild(option(t.tag, `${t.tag} (${t.count})`))
   r.tagSelect.value = tags.some((t) => t.tag === current) ? current : ''
   if (r.tagSelect.value !== current) state.tag = r.tagSelect.value
@@ -776,10 +776,12 @@ function renderAll(): void {
   })
   r.listView.style.display = state.tab === 'list' ? 'flex' : 'none'
   r.settingsView.style.display = state.tab === 'settings' ? 'block' : 'none'
-  renderStats(r)
-  renderWarn(r)
+  // stats 对全库 stringify + 标签聚合（5000 条时 MB 级 O(size)），一次算三家共用
+  const stats = store.stats()
+  renderStats(r, stats)
+  renderWarn(r, stats)
   if (state.tab === 'list') {
-    renderTagOptions(r)
+    renderTagOptions(r, stats)
     renderTable(r)
   } else {
     renderSettings(r)

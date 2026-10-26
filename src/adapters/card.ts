@@ -9,6 +9,8 @@ import {
   buildBadgeElement,
   clearPencilsOfScene,
   ensurePencil,
+  isSettled,
+  markSettled,
   renderBadge,
   showPencil,
   type BadgeOptions,
@@ -146,16 +148,29 @@ function bindLazyPencil(anchor: Element, mid: string, nickname: string): void {
   })
 }
 
-function pickTargets(): { targets: CardTarget[]; hits: { selector: string; hits: number }[] } {
+function pickTargets(): {
+  targets: CardTarget[]
+  hits: { selector: string; hits: number }[]
+  /** 页面上的候选锚点总数（含已终态跳过的）；doctor 判「页面没锚点」用原始数 */
+  raw: number
+  /** 本轮实际考察过的锚点数（排除终态跳过） */
+  considered: number
+} {
   const hits: { selector: string; hits: number }[] = []
   const targets: CardTarget[] = []
   const seen = new Set<Element>()
+  let raw = 0
+  let considered = 0
 
   for (let ci = 0; ci < CANDIDATES.length; ci++) {
     const selector = CANDIDATES[ci]
-    const found = qsa(selector).filter((el) => isVisible(el) && !seen.has(el))
-    hits.push({ selector, hits: found.length })
-    for (const el of found) {
+    const all = qsa(selector)
+    raw += all.length
+    hits.push({ selector, hits: all.length })
+    for (const el of all) {
+      if (isSettled(el)) continue
+      considered++
+      if (!isVisible(el) || seen.has(el)) continue
       seen.add(el)
       // 骨架卡 / 失效占位项没有 owner 链接 → resolve 返回 null 自然跳过，水合后由巡检补上
       const resolved = resolveFromElement(el)
@@ -169,7 +184,7 @@ function pickTargets(): { targets: CardTarget[]; hits: { selector: string; hits:
     }
   }
 
-  return { targets, hits }
+  return { targets, hits, raw, considered }
 }
 
 function inject(targets: CardTarget[]): number {
@@ -183,20 +198,23 @@ function inject(targets: CardTarget[]): number {
     if (record) {
       // 同一 UP 的多张卡各自挂徽标（按锚点幂等），不做 mid 去重
       if (isSidebarAnchor(target.anchor)) {
+        // 侧栏行内联进 B 站容器（会被重渲染 wipe），不登记终态，巡检每轮重申
         ensureSidebarRow(target.anchor, record, opts)
         injected++
       } else if (renderBadge(target.anchor, record, target.below ? { ...opts, placeBelow: true } : opts)) {
+        markSettled(target.anchor)
         injected++
       }
     } else {
       bindLazyPencil(target.anchor, target.mid, target.nickname)
+      markSettled(target.anchor)
     }
   }
   return injected
 }
 
 export function scanCards(): SceneDiagnostic {
-  const { targets, hits } = pickTargets()
+  const { targets, hits, raw, considered } = pickTargets()
   let injected = 0
   if (getSettings().scenes.card && getSettings().enabled) {
     pruneSidebarRows()
@@ -210,7 +228,8 @@ export function scanCards(): SceneDiagnostic {
     injected,
     notes: [],
   }
-  if (!targets.length) {
+  // 页面全无锚点 → 结构变了；有锚点但全已终态 → 正常静止，不算异常
+  if ((!raw || considered > 0) && !targets.length) {
     diag.notes.push('未找到卡片 UP 主锚点（可能尚未水合、不是卡片页或结构已变）')
   }
   setDiagnostic(diag)

@@ -75,7 +75,9 @@ function pickTargets(): { targets: CommentTarget[]; hits: { selector: string; hi
       // 徽标夹在昵称和等级之间：内联插到 #user-name 之后（真实结构 [slot, name, level]）
       const badgeAnchor = nameEl ?? undefined
       const renderer = closestDeep(ui, RENDERERS)
-      targets.push({ anchor, badgeAnchor, mid, nickname, face: faceOfComment(renderer) })
+      // face 下钻要枚举整棵渲染子树（每条评论 O(子树)），已缓存过头像的 mid 直接跳过
+      const face = faceOf(mid) ? '' : faceOfComment(renderer)
+      targets.push({ anchor, badgeAnchor, mid, nickname, face })
     }
   }
   hits.push({ selector: USER_INFO, hits: userInfoHits })

@@ -2,7 +2,7 @@ import { getSettings } from '../core/config'
 import { midFromHref, pageDocument, pageState, snapshotNickname } from '../core/midResolver'
 import { faceOf, rememberFace, rememberNick, setDiagnostic, type SceneDiagnostic } from '../core/runtime'
 import { store } from '../core/store'
-import { badgeOptions, clearPencilsOfScene, ensurePencil, renderBadge, showPencil } from '../ui/badge'
+import { badgeOptions, clearPencilsOfScene, ensurePencil, isSettled, markSettled, renderBadge, showPencil } from '../ui/badge'
 import { isVisible, qs, qsa } from '../util/dom'
 
 /**
@@ -236,18 +236,30 @@ function bindDynPencil(anchor: Element, mid: string, nickname: string): void {
  * 转发者（每卡一个）+ 原作者（仅转发卡，源卡引用区内）；同一卡两个锚点物理上不同层级
  * 不同行，portal 各自独立选址。自转发（orig.mid === 转发者 mid）不特判：两锚点各挂各的，显示同一份备注。
  */
-function pickDynTargets(): { targets: DynamicTarget[]; hits: { selector: string; hits: number }[] } {
+function pickDynTargets(): {
+  targets: DynamicTarget[]
+  hits: { selector: string; hits: number }[]
+  /** 本轮实际考察过的卡数（排除双锚点全终态跳过的） */
+  considered: number
+} {
   const targets: DynamicTarget[] = []
   const doc = pageDocument()
-  if (!doc) return { targets, hits: [] }
+  if (!doc) return { targets, hits: [], considered: 0 }
 
-  const cards = Array.from(doc.querySelectorAll(DYN_CARD)).filter((el) => isVisible(el))
+  let cardTotal = 0
+  let considered = 0
   let authorAnchors = 0
   let origAnchors = 0
-  for (const card of cards) {
+  for (const card of Array.from(doc.querySelectorAll(DYN_CARD))) {
+    cardTotal++
+    const anchor = card.querySelector(DYN_AUTHOR_ANCHOR)
+    const origAnchor = card.querySelector(DYN_ORIG_AUTHOR_ANCHOR)
+    // 双锚点都已终态（portal 徽标 / 按需铅笔）的卡整卡跳过：不读 __vue__、不量 isVisible
+    if (anchor && isSettled(anchor) && (!origAnchor || isSettled(origAnchor))) continue
+    considered++
+    if (!isVisible(card)) continue
     const data = dynDataOf(card)
     if (!data) continue
-    const anchor = card.querySelector(DYN_AUTHOR_ANCHOR)
     if (anchor && isVisible(anchor)) {
       authorAnchors++
       targets.push({
@@ -258,7 +270,6 @@ function pickDynTargets(): { targets: DynamicTarget[]; hits: { selector: string;
       })
     }
     if (data.orig) {
-      const origAnchor = card.querySelector(DYN_ORIG_AUTHOR_ANCHOR)
       if (origAnchor && isVisible(origAnchor)) {
         origAnchors++
         targets.push({
@@ -272,8 +283,9 @@ function pickDynTargets(): { targets: DynamicTarget[]; hits: { selector: string;
   }
   return {
     targets,
+    considered,
     hits: [
-      { selector: DYN_CARD, hits: cards.length },
+      { selector: DYN_CARD, hits: cardTotal },
       { selector: DYN_AUTHOR_ANCHOR, hits: authorAnchors },
       { selector: DYN_ORIG_AUTHOR_ANCHOR, hits: origAnchors },
     ],
@@ -293,16 +305,20 @@ function injectDyn(targets: DynamicTarget[]): number {
     if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face)
     const record = store.get(target.mid)
     if (record) {
-      if (renderBadge(target.anchor, record, opts)) injected++
+      if (renderBadge(target.anchor, record, opts)) {
+        markSettled(target.anchor)
+        injected++
+      }
     } else {
       bindDynPencil(target.anchor, target.mid, target.nickname)
+      markSettled(target.anchor)
     }
   }
   return injected
 }
 
 function scanDyn(): SceneDiagnostic {
-  const { targets, hits } = pickDynTargets()
+  const { targets, hits, considered } = pickDynTargets()
   let injected = 0
   if (getSettings().scenes.dynamic && getSettings().enabled) {
     injected = injectDyn(targets)
@@ -319,7 +335,7 @@ function scanDyn(): SceneDiagnostic {
     diag.notes.push('无法读取页面文档（unsafeWindow 不可用），dyn 分支未运行')
   } else if (!hits[0].hits) {
     diag.notes.push('未找到 .bili-dyn-item（可能尚未渲染完成、不是 dyn 页面或结构已变）')
-  } else if (!targets.length) {
+  } else if (considered > 0 && !targets.length) {
     diag.notes.push(
       `发现 ${hits[0].hits} 张 dyn 卡但 mid 数据 0 命中（__vue__ 数据面疑似失效，页面结构可能已改版）`,
     )

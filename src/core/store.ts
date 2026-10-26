@@ -1,4 +1,4 @@
-import { DATA_SCHEMA, LIMITS, STORAGE } from './constants'
+import { DATA_SCHEMA, DEFAULT_SETTINGS, LIMITS, STORAGE } from './constants'
 import type { ImportPreview, MergeStrategy, SceneKey, StoreData, UserRecord } from './types'
 import { emit } from './bus'
 import { byteLength, csvCell, formatTime } from '../util/format'
@@ -56,6 +56,14 @@ function normalizeColor(value: unknown): string | null {
   return null
 }
 
+/** firstSeen.scene 白名单：场景键 ∪ manual。导入面可塞任意字符串，不能 as 断言直通 */
+const SCENE_KEYS: ReadonlySet<string> = new Set([...Object.keys(DEFAULT_SETTINGS.scenes), 'manual'])
+
+function normalizeScene(value: unknown): SceneKey | 'manual' {
+  const s = asString(value, 'manual')
+  return SCENE_KEYS.has(s) ? (s as SceneKey | 'manual') : 'manual'
+}
+
 export interface RawRecordInput {
   mid?: unknown
   remark?: unknown
@@ -78,8 +86,8 @@ export function normalizeRecord(input: RawRecordInput, fallbackNow = now()): Use
   const firstSeen =
     firstSeenRaw && typeof firstSeenRaw === 'object'
       ? {
-          scene: (asString(firstSeenRaw.scene, 'manual') as SceneKey | 'manual') || 'manual',
-          url: asString(firstSeenRaw.url, ''),
+          scene: normalizeScene(firstSeenRaw.scene),
+          url: asString(firstSeenRaw.url, '').slice(0, LIMITS.firstSeenUrl),
         }
       : undefined
 
@@ -131,6 +139,34 @@ function parseData(raw: unknown): { data: StoreData; corrupted: boolean } {
   }
 }
 
+/** 自动备份保留份数：备份是全量拷贝，无限累积会先于正数据塞满 GM 存储 */
+const BACKUP_KEEP = 5
+
+/** 备份键尾段时间戳（brmk.data.backup[.reason].<ts>）；解析失败按 0 排最前 */
+function backupKeyTime(key: string): number {
+  const n = Number(key.slice(key.lastIndexOf('.') + 1))
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+/** 只留最近 BACKUP_KEEP 份自动备份；脚本管理器不支持列举/删除时静默放弃（不影响主流程） */
+function pruneBackups(): void {
+  let keys: string[]
+  try {
+    keys = GM_listValues().filter((key) => key.startsWith(STORAGE.backupPrefix))
+  } catch {
+    return
+  }
+  if (keys.length <= BACKUP_KEEP) return
+  const stale = keys.sort((a, b) => backupKeyTime(a) - backupKeyTime(b)).slice(0, keys.length - BACKUP_KEEP)
+  for (const key of stale) {
+    try {
+      GM_deleteValue(key)
+    } catch {
+      /* 单个删除失败下次再试 */
+    }
+  }
+}
+
 class RemarkStore {
   private data: StoreData = emptyData()
   private saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -153,6 +189,7 @@ class RemarkStore {
         } catch {
           /* 备份失败也不阻塞启动 */
         }
+        pruneBackups()
         this.lastError = '本地数据无法解析，已另存原始备份并启用空数据'
         warn(this.lastError)
       }
@@ -371,6 +408,7 @@ class RemarkStore {
     } catch (err) {
       warn('自动备份失败', err)
     }
+    pruneBackups()
   }
 
   replaceFromRemote(value: unknown): void {

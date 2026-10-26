@@ -167,12 +167,14 @@ function detectDark(): boolean {
 
 export function detectTheme(): ThemeInfo {
   const rawColor = cssVar('--theme-color')
-  const rgb = parseColor(rawColor) ?? FALLBACK_RGB
+  // 归一化闸门：--theme-color 是页面可控变量，buildCss 用字符串拼接进 <style>，
+  // 只放合法颜色形态（#hex / rgb()）进去，非法值一律按无主题色处理
+  const parsed = parseColor(rawColor)
   return {
     dark: detectDark(),
-    color: rawColor || toHex(FALLBACK_RGB),
-    rgb,
-    evolved: !!rawColor,
+    color: parsed ? rawColor : toHex(FALLBACK_RGB),
+    rgb: parsed ?? FALLBACK_RGB,
+    evolved: !!parsed,
   }
 }
 

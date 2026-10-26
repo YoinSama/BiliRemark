@@ -46,9 +46,13 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`
 }
 
+/** 公式触发字符：Excel/WPS/Sheets 会把这些开头的单元格当公式执行（CSV Injection） */
+const FORMULA_LEAD = /^[=+\-@\t\r]/
+
 export function csvCell(value: unknown): string {
   const s = value === null || value === undefined ? '' : String(value)
-  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+  const safe = FORMULA_LEAD.test(s) ? "'" + s : s
+  return /[",\r\n]/.test(safe) ? '"' + safe.replace(/"/g, '""') + '"' : safe
 }
 
 export function downloadText(filename: string, text: string, mime: string): void {

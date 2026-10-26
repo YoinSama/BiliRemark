@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliRemark
 // @namespace    https://github.com/YoinSama/BiliRemark
-// @version      1.7.5
+// @version      1.7.6
 // @author       Yoin
 // @description  B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。
 // @license      MIT
@@ -13,8 +13,10 @@
 // @match        https://message.bilibili.com/*
 // @match        https://search.bilibili.com/*
 // @grant        GM_addValueChangeListener
+// @grant        GM_deleteValue
 // @grant        GM_getValue
 // @grant        GM_info
+// @grant        GM_listValues
 // @grant        GM_registerMenuCommand
 // @grant        GM_setClipboard
 // @grant        GM_setValue
@@ -24,7 +26,7 @@
 
 (function() {
 	"use strict";
-	var VERSION = "1.7.5";
+	var VERSION = "1.7.6";
 	var STORAGE = {
 		data: "brmk.data.v1",
 		settings: "brmk.settings.v1",
@@ -36,6 +38,7 @@
 		tag: 16,
 		tags: 5,
 		note: 500,
+		firstSeenUrl: 500,
 		records: 5e3,
 		warnBytes: 4194304
 	};
@@ -506,9 +509,11 @@
 		if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
 		return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 	}
+	var FORMULA_LEAD = /^[=+\-@\t\r]/;
 	function csvCell(value) {
 		const s = value === null || value === void 0 ? "" : String(value);
-		return /[",\r\n]/.test(s) ? "\"" + s.replace(/"/g, "\"\"") + "\"" : s;
+		const safe = FORMULA_LEAD.test(s) ? "'" + s : s;
+		return /[",\r\n]/.test(safe) ? "\"" + safe.replace(/"/g, "\"\"") + "\"" : safe;
 	}
 	function downloadText(filename, text, mime) {
 		const blob = new Blob([text], { type: mime + ";charset=utf-8" });
@@ -563,6 +568,11 @@
 		if (/^rgba?\([\d\s.,%]+\)$/.test(v)) return v;
 		return null;
 	}
+	var SCENE_KEYS = new Set([...Object.keys(DEFAULT_SETTINGS.scenes), "manual"]);
+	function normalizeScene(value) {
+		const s = asString(value, "manual");
+		return SCENE_KEYS.has(s) ? s : "manual";
+	}
 	function normalizeRecord(input, fallbackNow = now()) {
 		const mid = normalizeMid(input.mid);
 		if (!mid) return null;
@@ -570,8 +580,8 @@
 		const updatedAt = timeOf(input.updatedAt, createdAt);
 		const firstSeenRaw = input.firstSeen;
 		const firstSeen = firstSeenRaw && typeof firstSeenRaw === "object" ? {
-			scene: asString(firstSeenRaw.scene, "manual") || "manual",
-			url: asString(firstSeenRaw.url, "")
+			scene: normalizeScene(firstSeenRaw.scene),
+			url: asString(firstSeenRaw.url, "").slice(0, LIMITS.firstSeenUrl)
 		} : void 0;
 		return {
 			mid,
@@ -627,6 +637,24 @@
 			corrupted: false
 		};
 	}
+	var BACKUP_KEEP = 5;
+	function backupKeyTime(key) {
+		const n = Number(key.slice(key.lastIndexOf(".") + 1));
+		return Number.isFinite(n) && n > 0 ? n : 0;
+	}
+	function pruneBackups() {
+		let keys;
+		try {
+			keys = GM_listValues().filter((key) => key.startsWith(STORAGE.backupPrefix));
+		} catch {
+			return;
+		}
+		if (keys.length <= BACKUP_KEEP) return;
+		const stale = keys.sort((a, b) => backupKeyTime(a) - backupKeyTime(b)).slice(0, keys.length - BACKUP_KEEP);
+		for (const key of stale) try {
+			GM_deleteValue(key);
+		} catch {}
+	}
 	var RemarkStore = class {
 		constructor() {
 			this.data = emptyData();
@@ -646,6 +674,7 @@
 					try {
 						GM_setValue(STORAGE.backupPrefix + now(), raw);
 					} catch {}
+					pruneBackups();
 					this.lastError = "本地数据无法解析，已另存原始备份并启用空数据";
 					warn(this.lastError);
 				}
@@ -854,6 +883,7 @@
 			} catch (err) {
 				warn("自动备份失败", err);
 			}
+			pruneBackups();
 		}
 		replaceFromRemote(value) {
 			const { data } = parseData(value);
@@ -1018,12 +1048,12 @@
 	}
 	function detectTheme() {
 		const rawColor = cssVar("--theme-color");
-		const rgb = parseColor(rawColor) ?? FALLBACK_RGB;
+		const parsed = parseColor(rawColor);
 		return {
 			dark: detectDark(),
-			color: rawColor || toHex(FALLBACK_RGB),
-			rgb,
-			evolved: !!rawColor
+			color: parsed ? rawColor : toHex(FALLBACK_RGB),
+			rgb: parsed ?? FALLBACK_RGB,
+			evolved: !!parsed
 		};
 	}
 	function watchTheme(callback) {
@@ -1393,6 +1423,7 @@
 	var byEl = new WeakMap();
 	var lastPos = new WeakMap();
 	var docRect = new WeakMap();
+	var elState = new WeakMap();
 	var layer = null;
 	var rafId = 0;
 	var pollTimer = null;
@@ -1551,37 +1582,33 @@
 		}
 		return bound;
 	}
-	function place(anchor, el, vw, vh, lrx, lry) {
-		const r = anchor.getBoundingClientRect();
+	function planPlace(anchor, el, r, naturalW, h, vw, vh) {
+		const plan = {
+			el,
+			anchor,
+			r,
+			naturalW,
+			h,
+			hide: false,
+			x: 0,
+			y: 0,
+			maxW: 0,
+			fits: true,
+			tight: false,
+			tightW: 0,
+			floorW: MIN_W
+		};
 		if (!r.width && !r.height) {
-			hide(el);
-			docRect.set(el, {
-				x: 0,
-				y: 0,
-				w: 0,
-				h: 0,
-				ok: false
-			});
-			return;
+			plan.hide = true;
+			return plan;
 		}
 		if (r.bottom < -8 || r.top > vh + 8 || r.right < -8 || r.left > vw + 8) {
-			hide(el);
-			docRect.set(el, {
-				x: 0,
-				y: 0,
-				w: 0,
-				h: 0,
-				ok: false
-			});
-			return;
+			plan.hide = true;
+			return plan;
 		}
-		el.removeAttribute("data-brmk-tight");
-		if (el.style.maxWidth) el.style.maxWidth = "";
-		let naturalW = el.offsetWidth;
-		const h = el.offsetHeight;
 		if (!naturalW || !h) {
-			hide(el);
-			return;
+			plan.hide = true;
+			return plan;
 		}
 		const parent = anchor.parentElement;
 		const pr = parent ? parent.getBoundingClientRect() : null;
@@ -1590,14 +1617,14 @@
 		const centeredY = Math.round(r.top + (r.height - h) / 2);
 		const rightX = Math.round(r.right + GAP);
 		const rowX = Math.round(rowRightOf(anchor) + GAP);
+		const mode = el.getAttribute("data-brmk-place");
+		const wantBelow = mode === "below" && !!pr;
+		const wantInline = mode === "inline" && !!pr;
+		plan.floorW = mode === "inline" ? INLINE_MIN_W : MIN_W;
 		let x;
 		let y;
 		let maxW;
 		let fits = true;
-		const floorW = el.getAttribute("data-brmk-place") === "inline" ? INLINE_MIN_W : MIN_W;
-		const mode = el.getAttribute("data-brmk-place");
-		const wantBelow = mode === "below" && !!pr;
-		const wantInline = mode === "inline" && !!pr;
 		if (wantBelow) {
 			x = Math.max(MARGIN, Math.round(r.left));
 			y = Math.round(r.bottom + 2);
@@ -1641,27 +1668,62 @@
 			y = centeredY;
 			maxW = vw - 8 - x;
 		}
-		if (naturalW > maxW) {
-			el.setAttribute("data-brmk-tight", "1");
-			naturalW = el.offsetWidth || naturalW;
-			if (naturalW > maxW) el.style.maxWidth = `${Math.max(floorW, Math.floor(maxW))}px`;
+		if (naturalW > maxW) plan.tight = true;
+		plan.x = x;
+		plan.y = y;
+		plan.maxW = maxW;
+		plan.fits = fits;
+		return plan;
+	}
+	function applyPlan(plan, vw, lrx, lry) {
+		const el = plan.el;
+		if (plan.hide) {
+			hide(el);
+			docRect.set(el, {
+				x: 0,
+				y: 0,
+				w: 0,
+				h: 0,
+				ok: false
+			});
+			elState.set(el, {
+				ax: plan.r.x,
+				ay: plan.r.y,
+				aw: plan.r.width,
+				ah: plan.r.height,
+				ew: 0,
+				eh: plan.h
+			});
+			return;
 		}
-		const width = el.offsetWidth || naturalW;
-		if (!fits) x = clamp(x, MARGIN, vw - 8 - width);
-		else x = Math.max(MARGIN, x);
-		const docX = x + window.scrollX;
-		const docY = y + window.scrollY;
+		let width = plan.naturalW;
+		if (plan.tight) {
+			width = plan.tightW || plan.naturalW;
+			if (width > plan.maxW) el.style.maxWidth = `${Math.max(plan.floorW, Math.floor(plan.maxW))}px`;
+		}
+		if (!plan.fits) plan.x = clamp(plan.x, MARGIN, vw - 8 - width);
+		else plan.x = Math.max(MARGIN, plan.x);
+		const docX = plan.x + window.scrollX;
+		const docY = plan.y + window.scrollY;
 		const sig = `${docX},${docY},${width}`;
 		if (lastPos.get(el) !== sig) {
-			el.style.translate = `${x - lrx}px ${y - lry}px`;
+			el.style.translate = `${plan.x - lrx}px ${plan.y - lry}px`;
 			lastPos.set(el, sig);
 		}
 		docRect.set(el, {
 			x: docX,
 			y: docY,
 			w: width,
-			h,
+			h: plan.h,
 			ok: true
+		});
+		elState.set(el, {
+			ax: plan.r.x,
+			ay: plan.r.y,
+			aw: plan.r.width,
+			ah: plan.r.height,
+			ew: width,
+			eh: plan.h
 		});
 		show(el);
 	}
@@ -1676,6 +1738,7 @@
 		const lrx = lr ? lr.left : 0;
 		const lry = lr ? lr.top : 0;
 		const dead = [];
+		const jobs = [];
 		for (const [anchor, slots] of byAnchor) {
 			if (!anchor.isConnected) {
 				dead.push(anchor);
@@ -1689,7 +1752,34 @@
 					byEl.delete(el);
 					continue;
 				}
-				place(anchor, el, vw, vh, lrx, lry);
+				const r = anchor.getBoundingClientRect();
+				const ew = el.offsetWidth;
+				const eh = el.offsetHeight;
+				const prev = elState.get(el);
+				if (prev && lastPos.has(el) && prev.ax === r.x && prev.ay === r.y && prev.aw === r.width && prev.ah === r.height && prev.ew === ew && prev.eh === eh) continue;
+				jobs.push({
+					anchor,
+					el,
+					r,
+					naturalW: ew,
+					h: eh
+				});
+			}
+		}
+		if (jobs.length) {
+			for (const j of jobs) {
+				j.el.removeAttribute("data-brmk-tight");
+				if (j.el.style.maxWidth) j.el.style.maxWidth = "";
+			}
+			const plans = [];
+			for (const j of jobs) plans.push(planPlace(j.anchor, j.el, j.r, j.naturalW, j.h, vw, vh));
+			for (const p of plans) if (!p.hide && p.tight) p.el.setAttribute("data-brmk-tight", "1");
+			for (const p of plans) if (!p.hide && p.tight) p.tightW = p.el.offsetWidth || p.naturalW;
+			for (const p of plans) applyPlan(p, vw, lrx, lry);
+			for (const p of plans) {
+				if (p.hide) continue;
+				const st = elState.get(p.el);
+				if (st) st.ew = p.el.offsetWidth || st.ew;
 			}
 		}
 		for (const anchor of dead) dropAnchor(anchor);
@@ -2349,6 +2439,17 @@
 	var pencilBound = new WeakSet();
 	var hideTimers = new WeakMap();
 	var HIDE_DELAY = 220;
+	var settleGen = 0;
+	var settledAt = new WeakMap();
+	function markSettled(anchor) {
+		settledAt.set(anchor, settleGen);
+	}
+	function isSettled(anchor) {
+		return settledAt.get(anchor) === settleGen;
+	}
+	function resetSettledAnchors() {
+		settleGen++;
+	}
 	function buildBadgeContent(badge, record, options) {
 		badge.textContent = "";
 		if (options.showColorDot) badge.appendChild(h("span", "brmk-dot"));
@@ -2625,12 +2726,13 @@
 				const anchor = nameEl?.parentElement ?? nameEl ?? ui;
 				const badgeAnchor = nameEl ?? void 0;
 				const renderer = closestDeep(ui, RENDERERS);
+				const face = faceOf(mid) ? "" : faceOfComment(renderer);
 				targets.push({
 					anchor,
 					badgeAnchor,
 					mid,
 					nickname,
-					face: faceOfComment(renderer)
+					face
 				});
 			}
 		}
@@ -2831,14 +2933,20 @@
 		const hits = [];
 		const targets = [];
 		const seen = new Set();
+		let raw = 0;
+		let considered = 0;
 		for (let ci = 0; ci < CANDIDATES$1.length; ci++) {
 			const selector = CANDIDATES$1[ci];
-			const found = qsa(selector).filter((el) => isVisible(el) && !seen.has(el));
+			const all = qsa(selector);
+			raw += all.length;
 			hits.push({
 				selector,
-				hits: found.length
+				hits: all.length
 			});
-			for (const el of found) {
+			for (const el of all) {
+				if (isSettled(el)) continue;
+				considered++;
+				if (!isVisible(el) || seen.has(el)) continue;
 				seen.add(el);
 				const resolved = resolveFromElement(el);
 				if (!resolved) continue;
@@ -2853,7 +2961,9 @@
 		}
 		return {
 			targets,
-			hits
+			hits,
+			raw,
+			considered
 		};
 	}
 	function inject$4(targets) {
@@ -2873,13 +2983,19 @@
 				} else if (renderBadge(target.anchor, record, target.below ? {
 					...opts,
 					placeBelow: true
-				} : opts)) injected++;
-			} else bindLazyPencil$2(target.anchor, target.mid, target.nickname);
+				} : opts)) {
+					markSettled(target.anchor);
+					injected++;
+				}
+			} else {
+				bindLazyPencil$2(target.anchor, target.mid, target.nickname);
+				markSettled(target.anchor);
+			}
 		}
 		return injected;
 	}
 	function scanCards() {
-		const { targets, hits } = pickTargets$4();
+		const { targets, hits, raw, considered } = pickTargets$4();
 		let injected = 0;
 		if (getSettings().scenes.card && getSettings().enabled) {
 			pruneSidebarRows();
@@ -2893,7 +3009,7 @@
 			injected,
 			notes: []
 		};
-		if (!targets.length) diag.notes.push("未找到卡片 UP 主锚点（可能尚未水合、不是卡片页或结构已变）");
+		if ((!raw || considered > 0) && !targets.length) diag.notes.push("未找到卡片 UP 主锚点（可能尚未水合、不是卡片页或结构已变）");
 		setDiagnostic(diag);
 		return diag;
 	}
@@ -3070,15 +3186,22 @@
 		const doc = pageDocument();
 		if (!doc) return {
 			targets,
-			hits: []
+			hits: [],
+			considered: 0
 		};
-		const cards = Array.from(doc.querySelectorAll(DYN_CARD)).filter((el) => isVisible(el));
+		let cardTotal = 0;
+		let considered = 0;
 		let authorAnchors = 0;
 		let origAnchors = 0;
-		for (const card of cards) {
+		for (const card of Array.from(doc.querySelectorAll(DYN_CARD))) {
+			cardTotal++;
+			const anchor = card.querySelector(DYN_AUTHOR_ANCHOR);
+			const origAnchor = card.querySelector(DYN_ORIG_AUTHOR_ANCHOR);
+			if (anchor && isSettled(anchor) && (!origAnchor || isSettled(origAnchor))) continue;
+			considered++;
+			if (!isVisible(card)) continue;
 			const data = dynDataOf(card);
 			if (!data) continue;
-			const anchor = card.querySelector(DYN_AUTHOR_ANCHOR);
 			if (anchor && isVisible(anchor)) {
 				authorAnchors++;
 				targets.push({
@@ -3089,7 +3212,6 @@
 				});
 			}
 			if (data.orig) {
-				const origAnchor = card.querySelector(DYN_ORIG_AUTHOR_ANCHOR);
 				if (origAnchor && isVisible(origAnchor)) {
 					origAnchors++;
 					targets.push({
@@ -3103,10 +3225,11 @@
 		}
 		return {
 			targets,
+			considered,
 			hits: [
 				{
 					selector: DYN_CARD,
-					hits: cards.length
+					hits: cardTotal
 				},
 				{
 					selector: DYN_AUTHOR_ANCHOR,
@@ -3132,13 +3255,19 @@
 			if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face);
 			const record = store.get(target.mid);
 			if (record) {
-				if (renderBadge(target.anchor, record, opts)) injected++;
-			} else bindDynPencil(target.anchor, target.mid, target.nickname);
+				if (renderBadge(target.anchor, record, opts)) {
+					markSettled(target.anchor);
+					injected++;
+				}
+			} else {
+				bindDynPencil(target.anchor, target.mid, target.nickname);
+				markSettled(target.anchor);
+			}
 		}
 		return injected;
 	}
 	function scanDyn() {
-		const { targets, hits } = pickDynTargets();
+		const { targets, hits, considered } = pickDynTargets();
 		let injected = 0;
 		if (getSettings().scenes.dynamic && getSettings().enabled) injected = injectDyn(targets);
 		const diag = {
@@ -3151,7 +3280,7 @@
 		};
 		if (!hits.length) diag.notes.push("无法读取页面文档（unsafeWindow 不可用），dyn 分支未运行");
 		else if (!hits[0].hits) diag.notes.push("未找到 .bili-dyn-item（可能尚未渲染完成、不是 dyn 页面或结构已变）");
-		else if (!targets.length) diag.notes.push(`发现 ${hits[0].hits} 张 dyn 卡但 mid 数据 0 命中（__vue__ 数据面疑似失效，页面结构可能已改版）`);
+		else if (considered > 0 && !targets.length) diag.notes.push(`发现 ${hits[0].hits} 张 dyn 卡但 mid 数据 0 命中（__vue__ 数据面疑似失效，页面结构可能已改版）`);
 		setDiagnostic(diag);
 		return diag;
 	}
@@ -3314,12 +3443,12 @@
 	var rowFirstSeen = new WeakMap();
 	var imInline = new Set();
 	function pickTargets$1() {
-		const rows = qsa(ROW_SELECTOR).filter((el) => isRowContainer(el) && isVisible(el));
+		const allRows = qsa(ROW_SELECTOR);
 		const contacts = qsa(CONTACT_SELECTOR).filter((el) => isVisible(el));
 		const hits = [
 			{
 				selector: ROW_SELECTOR,
-				hits: rows.length
+				hits: allRows.length
 			},
 			{
 				selector: NAME_SELECTOR,
@@ -3331,10 +3460,13 @@
 			}
 		];
 		const targets = [];
-		for (const row of rows) {
+		for (const row of allRows) {
+			if (!isRowContainer(row)) continue;
 			const mid = midFromRow(row);
 			if (!mid) continue;
 			const anchor = anchorOfRow(row);
+			if (isSettled(anchor)) continue;
+			if (!isVisible(row)) continue;
 			if (targets.some((t) => t.mid === mid && (t.anchor.contains(anchor) || anchor.contains(t.anchor)))) continue;
 			targets.push({
 				anchor,
@@ -3355,19 +3487,18 @@
 				lazy: false
 			});
 		}
-		for (const row of rows) {
-			if (midFromRow(row)) continue;
-			const resolved = resolveFromElement(anchorOfRow(row));
-			if (resolved && !targets.some((t) => t.mid === resolved.mid)) {
-				const anchor = anchorOfRow(row);
-				targets.push({
-					anchor,
-					mid: resolved.mid,
-					nickname: snapshotNickname(anchor),
-					face: faceFromRow(row),
-					lazy: true
-				});
-			}
+		for (const row of allRows) {
+			if (!isRowContainer(row) || midFromRow(row)) continue;
+			const anchor = anchorOfRow(row);
+			if (isSettled(anchor)) continue;
+			const resolved = resolveFromElement(anchor);
+			if (resolved && !targets.some((t) => t.mid === resolved.mid)) targets.push({
+				anchor,
+				mid: resolved.mid,
+				nickname: snapshotNickname(anchor),
+				face: faceFromRow(row),
+				lazy: true
+			});
 		}
 		return {
 			targets,
@@ -3402,16 +3533,24 @@
 			if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face);
 			const record = store.get(target.mid);
 			if (!record) {
-				if (target.lazy) bindLazyPencil$1(target.anchor, target.mid, target.nickname);
-				else ensurePencil(target.anchor, target.mid, target.nickname, "message");
+				if (target.lazy) {
+					bindLazyPencil$1(target.anchor, target.mid, target.nickname);
+					markSettled(target.anchor);
+				} else ensurePencil(target.anchor, target.mid, target.nickname, "message");
 				continue;
 			}
 			if (!target.lazy) {
-				if (renderBadge(target.anchor, record, headerOpts)) injected++;
+				if (renderBadge(target.anchor, record, headerOpts)) {
+					markSettled(target.anchor);
+					injected++;
+				}
 				continue;
 			}
 			if (!target.anchor.parentElement?.className.includes("SessionItem__Title")) {
-				if (renderBadge(target.anchor, record, rowOpts)) injected++;
+				if (renderBadge(target.anchor, record, rowOpts)) {
+					markSettled(target.anchor);
+					injected++;
+				}
 				continue;
 			}
 			const born = rowFirstSeen.get(target.anchor);
@@ -3441,7 +3580,7 @@
 			injected,
 			notes: []
 		};
-		if (!targets.length) diag.notes.push("未找到会话行/联系人锚点（列表为空、未打开会话、结构已变或行 data-id 非 contact_ 前缀）");
+		if (!hits[0].hits && !hits[2].hits) diag.notes.push("未找到会话行/联系人锚点（列表为空、未打开会话、结构已变或行 data-id 非 contact_ 前缀）");
 		setDiagnostic(diag);
 		return diag;
 	}
@@ -3464,14 +3603,16 @@
 		return (anchor.closest(".relation-card") ?? anchor.closest(".items"))?.querySelector("img[src*=\"/bfs/face/\"]")?.getAttribute("src") ?? "";
 	}
 	function pickTargets() {
-		const unames = qsa(UNAME_SELECTOR).filter((el) => isVisible(el));
-		const cardLinks = qsa(CARD_LINK_SELECTOR).filter((el) => isVisible(el));
+		const allU = qsa(UNAME_SELECTOR);
+		const allL = qsa(CARD_LINK_SELECTOR);
+		const unames = allU.filter((el) => !isSettled(el) && isVisible(el));
+		const cardLinks = allL.filter((el) => !isSettled(el) && isVisible(el));
 		const hits = [{
 			selector: UNAME_SELECTOR,
-			hits: unames.length
+			hits: allU.length
 		}, {
 			selector: CARD_LINK_SELECTOR,
-			hits: cardLinks.length
+			hits: allL.length
 		}];
 		const targets = [];
 		const cardOf = (el) => el.closest(".relation-card");
@@ -3492,6 +3633,10 @@
 		for (const link of cardLinks) {
 			const card = cardOf(link);
 			if (card && doneCards.has(card)) continue;
+			if (card) {
+				const unameEl = qs(UNAME_SELECTOR, card);
+				if (unameEl && isSettled(unameEl)) continue;
+			}
 			const resolved = resolveFromElement(link, { allowDescendant: false });
 			if (!resolved) continue;
 			if (card) doneCards.add(card);
@@ -3530,8 +3675,14 @@
 			if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face);
 			const record = store.get(target.mid);
 			if (record) {
-				if (renderBadge(target.anchor, record, opts)) injected++;
-			} else bindLazyPencil(target.anchor, target.mid, target.nickname);
+				if (renderBadge(target.anchor, record, opts)) {
+					markSettled(target.anchor);
+					injected++;
+				}
+			} else {
+				bindLazyPencil(target.anchor, target.mid, target.nickname);
+				markSettled(target.anchor);
+			}
 		}
 		return injected;
 	}
@@ -3547,7 +3698,7 @@
 			injected,
 			notes: []
 		};
-		if (!targets.length) diag.notes.push("未找到关系列表行（未登录登录墙 / 列表为空 / 非卡片壳或结构已变）");
+		if (!hits[0].hits && !hits[1].hits) diag.notes.push("未找到关系列表行（未登录登录墙 / 列表为空 / 非卡片壳或结构已变）");
 		setDiagnostic(diag);
 		return diag;
 	}
@@ -4091,8 +4242,7 @@
 	function pageSize() {
 		return Math.max(10, getSettings().manager.pageSize);
 	}
-	function renderStats(r) {
-		const stats = store.stats();
+	function renderStats(r, stats) {
 		const settings = getSettings();
 		const days = daysSince(settings.backup.lastExportAt);
 		r.countBadge.textContent = String(stats.count);
@@ -4116,10 +4266,9 @@
 			r.stats.appendChild(tagsBox);
 		}
 	}
-	function renderWarn(r) {
+	function renderWarn(r, stats) {
 		r.warn.textContent = "";
 		const messages = [];
-		const stats = store.stats();
 		const settings = getSettings();
 		if (store.lastError) messages.push(store.lastError);
 		if (stats.bytes > LIMITS.warnBytes) messages.push(`估算占用 ${formatBytes(stats.bytes)}，接近存储上限，建议先导出备份再清理。`);
@@ -4129,11 +4278,11 @@
 		if (!messages.length) return;
 		for (const msg of messages) r.warn.appendChild(h("div", "brmk-warn", msg));
 	}
-	function renderTagOptions(r) {
+	function renderTagOptions(r, stats) {
 		const current = state.tag;
 		r.tagSelect.textContent = "";
 		r.tagSelect.appendChild(option("", "全部标签"));
-		const tags = store.stats().tags;
+		const tags = stats.tags;
 		for (const t of tags) r.tagSelect.appendChild(option(t.tag, `${t.tag} (${t.count})`));
 		r.tagSelect.value = tags.some((t) => t.tag === current) ? current : "";
 		if (r.tagSelect.value !== current) state.tag = r.tagSelect.value;
@@ -4542,10 +4691,11 @@
 		});
 		r.listView.style.display = state.tab === "list" ? "flex" : "none";
 		r.settingsView.style.display = state.tab === "settings" ? "block" : "none";
-		renderStats(r);
-		renderWarn(r);
+		const stats = store.stats();
+		renderStats(r, stats);
+		renderWarn(r, stats);
 		if (state.tab === "list") {
-			renderTagOptions(r);
+			renderTagOptions(r, stats);
 			renderTable(r);
 		} else renderSettings(r);
 	}
@@ -5071,10 +5221,9 @@
 	function setDoctorRescan(fn) {
 		rescan = fn;
 	}
-	function buildReport() {
+	function buildReport(stats) {
 		const lines = [];
 		const theme = getTheme();
-		const stats = store.stats();
 		lines.push(`URL: ${location.href}`);
 		lines.push(`页面类型: ${document.title}`);
 		lines.push(`主题: dark=${theme.dark} evolved=${theme.evolved} color=${theme.color}`);
@@ -5117,7 +5266,7 @@
 		const diags = getDiagnostics();
 		if (!diags.length) el.appendChild(h("div", "brmk-doc-row", "当前页面没有启用的场景适配器"));
 		for (const diag of diags) el.appendChild(h("div", "brmk-doc-row", `${diag.label}：mid ${diag.midResolved} / 注入 ${diag.injected}`));
-		const pre = h("pre", "", buildReport());
+		const pre = h("pre", "", buildReport(stats));
 		el.appendChild(pre);
 		const actions = h("div");
 		actions.style.display = "flex";
@@ -5134,8 +5283,8 @@
 		copy.type = "button";
 		copy.addEventListener("click", () => {
 			try {
-				if (typeof GM_setClipboard === "function") GM_setClipboard(buildReport(), "text");
-				else navigator.clipboard?.writeText(buildReport());
+				if (typeof GM_setClipboard === "function") GM_setClipboard(buildReport(store.stats()), "text");
+				else navigator.clipboard?.writeText(buildReport(store.stats()));
 				toast("诊断信息已复制");
 			} catch {
 				toast("复制失败");
@@ -5267,6 +5416,7 @@
 		log("路由变化", location.href);
 		cancelCommentBatch();
 		clearInjected();
+		resetSettledAnchors();
 		if (!isSpacePage()) clearSpaceAside();
 		closeDoctor();
 		scheduleScan(300);
@@ -5374,6 +5524,7 @@
 		refreshTheme();
 		installStyles();
 		themeCleanup = watchTheme(() => {
+			resetSettledAnchors();
 			installStyles(refreshTheme());
 			emit("theme-changed");
 			log("主题已更新");
@@ -5383,8 +5534,12 @@
 		bindStorageSync();
 		bindHotkey();
 		setDoctorRescan(() => scanNow());
-		on("data-changed", () => scanNow());
+		on("data-changed", () => {
+			resetSettledAnchors();
+			scheduleScan();
+		});
 		on("settings-changed", () => {
+			resetSettledAnchors();
 			installStyles(refreshTheme());
 			scanNow();
 		});

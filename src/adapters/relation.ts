@@ -2,7 +2,7 @@ import { getSettings } from '../core/config'
 import { resolveFromElement, snapshotNickname } from '../core/midResolver'
 import { faceOf, rememberFace, rememberNick, setDiagnostic, type SceneDiagnostic } from '../core/runtime'
 import { store } from '../core/store'
-import { badgeOptions, clearPencilsOfScene, ensurePencil, renderBadge, showPencil } from '../ui/badge'
+import { badgeOptions, clearPencilsOfScene, ensurePencil, isSettled, markSettled, renderBadge, showPencil } from '../ui/badge'
 import { isVisible, qs, qsa } from '../util/dom'
 
 /**
@@ -51,11 +51,14 @@ interface RelationTarget {
 }
 
 function pickTargets(): { targets: RelationTarget[]; hits: { selector: string; hits: number }[] } {
-  const unames = qsa(UNAME_SELECTOR).filter((el) => isVisible(el))
-  const cardLinks = qsa(CARD_LINK_SELECTOR).filter((el) => isVisible(el))
+  const allU = qsa(UNAME_SELECTOR)
+  const allL = qsa(CARD_LINK_SELECTOR)
+  // 已终态锚点（portal 徽标 / 按需铅笔）跳过：省每轮 isVisible 的布局读；hits 报原始数供 doctor 判页面
+  const unames = allU.filter((el) => !isSettled(el) && isVisible(el))
+  const cardLinks = allL.filter((el) => !isSettled(el) && isVisible(el))
   const hits = [
-    { selector: UNAME_SELECTOR, hits: unames.length },
-    { selector: CARD_LINK_SELECTOR, hits: cardLinks.length },
+    { selector: UNAME_SELECTOR, hits: allU.length },
+    { selector: CARD_LINK_SELECTOR, hits: allL.length },
   ]
 
   const targets: RelationTarget[] = []
@@ -76,6 +79,12 @@ function pickTargets(): { targets: RelationTarget[]; hits: { selector: string; h
   for (const link of cardLinks) {
     const card = cardOf(link)
     if (card && doneCards.has(card)) continue
+    // 昵称锚点已终态被跳过时 doneCards 里没有这张卡，但卡其实处理过——不补判会让
+    // 兜底循环给同一张卡再挂一枚头像徽标（E2E step87 抓获）
+    if (card) {
+      const unameEl = qs(UNAME_SELECTOR, card)
+      if (unameEl && isSettled(unameEl)) continue
+    }
     const resolved = resolveFromElement(link, { allowDescendant: false })
     if (!resolved) continue
     if (card) doneCards.add(card)
@@ -109,9 +118,13 @@ function inject(targets: RelationTarget[]): number {
     if (target.face && !faceOf(target.mid)) rememberFace(target.mid, target.face)
     const record = store.get(target.mid)
     if (record) {
-      if (renderBadge(target.anchor, record, opts)) injected++
+      if (renderBadge(target.anchor, record, opts)) {
+        markSettled(target.anchor)
+        injected++
+      }
     } else {
       bindLazyPencil(target.anchor, target.mid, target.nickname)
+      markSettled(target.anchor)
     }
   }
   return injected
@@ -131,7 +144,7 @@ export function scanRelation(): SceneDiagnostic {
     injected,
     notes: [],
   }
-  if (!targets.length) {
+  if (!hits[0].hits && !hits[1].hits) {
     diag.notes.push('未找到关系列表行（未登录登录墙 / 列表为空 / 非卡片壳或结构已变）')
   }
   setDiagnostic(diag)

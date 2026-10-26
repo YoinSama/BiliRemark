@@ -41,6 +41,8 @@ const byEl = new WeakMap<HTMLElement, { anchor: Element; slot: Slot }>()
 const lastPos = new WeakMap<HTMLElement, string>()
 /** 最近一次测得的文档坐标（主文档滚动时用它做零开销可见性刷新，不重新测量） */
 const docRect = new WeakMap<HTMLElement, { x: number; y: number; w: number; h: number; ok: boolean }>()
+/** 上轮快照（锚点视口矩形 + 元素尺寸）：完全一致就跳过该元素的一切选址与写回 */
+const elState = new WeakMap<HTMLElement, { ax: number; ay: number; aw: number; ah: number; ew: number; eh: number }>()
 
 let layer: HTMLElement | null = null
 let rafId = 0
@@ -255,27 +257,49 @@ function inlineBoundRight(
  *   3. 父容器下方
  * 都不合适时退回锚点右侧并夹进视口。
  */
-function place(anchor: Element, el: HTMLElement, vw: number, vh: number, lrx: number, lry: number): void {
-  const r = anchor.getBoundingClientRect()
+/** 单个脏元素的选址决策（planPlace 只读不写，applyPlan 只写不读） */
+interface PlacePlan {
+  el: HTMLElement
+  anchor: Element
+  /** 锚点视口矩形（pass 1 已量） */
+  r: DOMRect
+  /** 清 tight/maxWidth 后的自然尺寸（pass 2 写、pass 3 前量） */
+  naturalW: number
+  h: number
+  hide: boolean
+  x: number
+  y: number
+  maxW: number
+  fits: boolean
+  tight: boolean
+  /** tight 置位后复测的自然宽度（pass 5 填） */
+  tightW: number
+  floorW: number
+}
+
+/**
+ * 选址优先级（与旧版逐分支等价）：
+ *   0a. 锚点行下方（仅 data-brmk-place="below" 的徽标）
+ *   0b. 锚点文字右侧（仅 data-brmk-place="inline"：Range 量末行文字右缘）
+ *   1. 锚点右侧（不压住同行任何兄弟）
+ *   2. 整行末尾
+ *   3. 父容器下方
+ * 都不合适时退回锚点右侧并夹进视口。
+ */
+function planPlace(anchor: Element, el: HTMLElement, r: DOMRect, naturalW: number, h: number, vw: number, vh: number): PlacePlan {
+  const plan: PlacePlan = { el, anchor, r, naturalW, h, hide: false, x: 0, y: 0, maxW: 0, fits: true, tight: false, tightW: 0, floorW: MIN_W }
+
   if (!r.width && !r.height) {
-    hide(el)
-    docRect.set(el, { x: 0, y: 0, w: 0, h: 0, ok: false })
-    return
+    plan.hide = true
+    return plan
   }
   if (r.bottom < -8 || r.top > vh + 8 || r.right < -8 || r.left > vw + 8) {
-    hide(el)
-    docRect.set(el, { x: 0, y: 0, w: 0, h: 0, ok: false })
-    return
+    plan.hide = true
+    return plan
   }
-
-  // 先量自然尺寸，再决定放到哪
-  el.removeAttribute('data-brmk-tight')
-  if (el.style.maxWidth) el.style.maxWidth = ''
-  let naturalW = el.offsetWidth
-  const h = el.offsetHeight
   if (!naturalW || !h) {
-    hide(el)
-    return
+    plan.hide = true
+    return plan
   }
 
   const parent = anchor.parentElement
@@ -287,33 +311,31 @@ function place(anchor: Element, el: HTMLElement, vw: number, vh: number, lrx: nu
   const rightX = Math.round(r.right + GAP)
   const rowX = Math.round(rowRightOf(anchor) + GAP)
 
+  const mode = el.getAttribute('data-brmk-place')
+  const wantBelow = mode === 'below' && !!pr
+  const wantInline = mode === 'inline' && !!pr
+  plan.floorW = mode === 'inline' ? INLINE_MIN_W : MIN_W
+
   let x: number
   let y: number
   let maxW: number
   let fits = true
-  /** 收缩底线：行内挂法更小（永不落下方，压到 34px 也保持可读的圆点+两字） */
-  const floorW = el.getAttribute('data-brmk-place') === 'inline' ? INLINE_MIN_W : MIN_W
 
-  const mode = el.getAttribute('data-brmk-place')
-  const wantBelow = mode === 'below' && !!pr
-  const wantInline = mode === 'inline' && !!pr
   if (wantBelow) {
     x = Math.max(MARGIN, Math.round(r.left))
     y = Math.round(r.bottom + 2)
-    // 卡片作者行的父容器就是卡片信息区整行，徽标宽度以它为界（超出走下方收档逻辑）
     maxW = Math.round(pr!.right - 2) - x
     if (maxW < need) {
       fits = false
       maxW = Math.max(need, vw - MARGIN * 2 - x)
     }
   } else if (wantInline) {
-    // 文字右缘（块级锚点的 rect 是整列宽，不能直接用）；量不到时退元素右缘
     const text = lastTextRect(anchor) ?? { right: r.right, top: r.top, height: r.height }
     x = Math.round(text.right + GAP)
     y = Math.round(text.top + (text.height - h) / 2)
     maxW = inlineBoundRight(anchor, parent!, text.top, text.top + text.height, x) - x
     if (maxW < INLINE_MIN_W) {
-      // 极端满行（找不到任何有留白的行级祖先）：右对齐到父容器右缘，有界贴行尾，绝不落下方
+      // 极端满行：右对齐到父容器右缘，有界贴行尾，绝不落下方
       maxW = INLINE_MIN_W
       x = Math.round(pr!.right - 2) - maxW
     }
@@ -340,42 +362,58 @@ function place(anchor: Element, el: HTMLElement, vw: number, vh: number, lrx: nu
     maxW = vw - MARGIN * 2 - x
   }
 
-  if (naturalW > maxW) {
-    // 空间不够：先让元素自己收一档（徽标会隐藏标签胶囊），收完还放不下才截断
-    el.setAttribute('data-brmk-tight', '1')
-    naturalW = el.offsetWidth || naturalW
-    if (naturalW > maxW) el.style.maxWidth = `${Math.max(floorW, Math.floor(maxW))}px`
+  if (naturalW > maxW) plan.tight = true
+  plan.x = x
+  plan.y = y
+  plan.maxW = maxW
+  plan.fits = fits
+  return plan
+}
+
+/** 写回阶段：定位仍走独立 translate 属性（见旧版注释：transform 会被按压过渡拖慢）。
+ *  y 在任何分支都不夹进视口（夹了会让临界滚动的徽标脱离锚点，由 refreshVisibility 隐藏、
+ *  吸顶/固定栏由层 z-index 负责——2026-10-25 报障定案）。 */
+function applyPlan(plan: PlacePlan, vw: number, lrx: number, lry: number): void {
+  const el = plan.el
+  if (plan.hide) {
+    hide(el)
+    docRect.set(el, { x: 0, y: 0, w: 0, h: 0, ok: false })
+    elState.set(el, { ax: plan.r.x, ay: plan.r.y, aw: plan.r.width, ah: plan.r.height, ew: 0, eh: plan.h })
+    return
   }
 
-  const width = el.offsetWidth || naturalW
-  // y 在任何分支都不夹进视口：夹了会把「锚点半出视口」的徽标硬推进视口内，恰好发生在
-  // 顶/底临界滚动窗口（200ms 轮询每次都重算）——徽标脱离锚点往下挪、压到下一行
-  // （2026-10-25 主人报障：视频页 UP 备注撞签名行；兜底分支同样命中——S7 关系卡
-  // 真机落点就是父容器下方，窄列宽徽标 maxW<need 时 fits=false 走到这里）。
-  // 正确行为是贴死锚点随页面滚出去：滚出视口由 refreshVisibility 隐藏，
-  // 被吸顶/固定栏盖住由层 z-index 负责（LAYER_Z）。
-  if (!fits) {
-    x = clamp(x, MARGIN, vw - MARGIN * 2 - width)
+  let width = plan.naturalW
+  if (plan.tight) {
+    width = plan.tightW || plan.naturalW
+    if (width > plan.maxW) el.style.maxWidth = `${Math.max(plan.floorW, Math.floor(plan.maxW))}px`
+  }
+
+  if (!plan.fits) {
+    plan.x = clamp(plan.x, MARGIN, vw - MARGIN * 2 - width)
   } else {
-    x = Math.max(MARGIN, x)
+    plan.x = Math.max(MARGIN, plan.x)
   }
 
-  // 定位必须走独立的 translate 属性而不是 transform：.brmk-badge 的 transition
-  // 里有 transform（按压 scale 用的），若用 transform 定位，任何写回都会被过渡拖慢。
-  // 坐标系：浮层本体钉在文档原点（absolute，随页面滚动），所以 translate 取
-  // 「视口坐标 − 浮层视口偏移」＝文档坐标；主文档滚动时这里完全不被调用，
-  // 徽标与页面同帧移动，不存在 JS 追帧造成的飘移。
-  const docX = x + window.scrollX
-  const docY = y + window.scrollY
+  const docX = plan.x + window.scrollX
+  const docY = plan.y + window.scrollY
   const sig = `${docX},${docY},${width}`
   if (lastPos.get(el) !== sig) {
-    el.style.translate = `${x - lrx}px ${y - lry}px`
+    el.style.translate = `${plan.x - lrx}px ${plan.y - lry}px`
     lastPos.set(el, sig)
   }
-  docRect.set(el, { x: docX, y: docY, w: width, h, ok: true })
+  docRect.set(el, { x: docX, y: docY, w: width, h: plan.h, ok: true })
+  elState.set(el, { ax: plan.r.x, ay: plan.r.y, aw: plan.r.width, ah: plan.r.height, ew: width, eh: plan.h })
   show(el)
 }
 
+/**
+ * 两阶段重排（读写分离，消灭 layout thrash）：
+ *   pass 1 纯读——量全部锚点矩形与元素尺寸，与上轮快照一致的直接跳过（静止页零写零下钻）；
+ *   pass 2 写——脏元素清 tight / maxWidth 恢复自然尺寸；
+ *   pass 3 纯读+决策——脏元素选址（父容器 / 行尾 / 障碍矩形都在这一批读）；
+ *   pass 4 写——tight 标记；pass 5 读——收档后自然宽；pass 6 写——maxWidth / translate / 可见性；
+ *   pass 7 读——实际渲染宽度回填快照（消除取整差，否则元素会永远「变脏」）。
+ */
 function sync(): void {
   if (!byAnchor.size) {
     stopPoll()
@@ -383,11 +421,11 @@ function sync(): void {
   }
   const vw = document.documentElement.clientWidth || window.innerWidth
   const vh = window.innerHeight
-  // 浮层自己的视口位置（每轮量一次）：它钉在文档原点附近，视口偏移即滚动补偿
   const lr = layer?.getBoundingClientRect()
   const lrx = lr ? lr.left : 0
   const lry = lr ? lr.top : 0
   const dead: Element[] = []
+  const jobs: { anchor: Element; el: HTMLElement; r: DOMRect; naturalW: number; h: number }[] = []
 
   for (const [anchor, slots] of byAnchor) {
     if (!anchor.isConnected) {
@@ -402,7 +440,40 @@ function sync(): void {
         byEl.delete(el)
         continue
       }
-      place(anchor, el, vw, vh, lrx, lry)
+      const r = anchor.getBoundingClientRect()
+      const ew = el.offsetWidth
+      const eh = el.offsetHeight
+      const prev = elState.get(el)
+      if (
+        prev &&
+        lastPos.has(el) &&
+        prev.ax === r.x &&
+        prev.ay === r.y &&
+        prev.aw === r.width &&
+        prev.ah === r.height &&
+        prev.ew === ew &&
+        prev.eh === eh
+      ) {
+        continue
+      }
+      jobs.push({ anchor, el, r, naturalW: ew, h: eh })
+    }
+  }
+
+  if (jobs.length) {
+    for (const j of jobs) {
+      j.el.removeAttribute('data-brmk-tight')
+      if (j.el.style.maxWidth) j.el.style.maxWidth = ''
+    }
+    const plans: PlacePlan[] = []
+    for (const j of jobs) plans.push(planPlace(j.anchor, j.el, j.r, j.naturalW, j.h, vw, vh))
+    for (const p of plans) if (!p.hide && p.tight) p.el.setAttribute('data-brmk-tight', '1')
+    for (const p of plans) if (!p.hide && p.tight) p.tightW = p.el.offsetWidth || p.naturalW
+    for (const p of plans) applyPlan(p, vw, lrx, lry)
+    for (const p of plans) {
+      if (p.hide) continue
+      const st = elState.get(p.el)
+      if (st) st.ew = p.el.offsetWidth || st.ew
     }
   }
 
