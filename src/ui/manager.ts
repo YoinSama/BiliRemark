@@ -6,6 +6,8 @@ import type { MergeStrategy, SceneKey, UserRecord } from '../core/types'
 import { on } from '../core/bus'
 import { h, truncate } from '../util/dom'
 import { daysSince, downloadText, formatBytes, formatTime, relativeTime, stampForFile } from '../util/format'
+import { attachCombobox } from './combobox'
+import type { ComboboxHandle } from './combobox'
 import { openEditor } from './editor'
 import { managerPalette, paletteOf, getTheme } from './theme'
 import { toast } from './toast'
@@ -59,7 +61,7 @@ interface Refs {
   listView: HTMLElement
   settingsView: HTMLElement
   toolbar: HTMLElement
-  tagSelect: HTMLSelectElement
+  tagFilter: HTMLInputElement
   sceneSelect: HTMLSelectElement
   noteSelect: HTMLSelectElement
   sortSelect: HTMLSelectElement
@@ -74,6 +76,7 @@ interface Refs {
 
 let refs: Refs | null = null
 let unbindBus: (() => void) | null = null
+let tagCombo: ComboboxHandle | null = null
 let prevOverflow = ''
 let keyHandler: ((ev: KeyboardEvent) => void) | null = null
 
@@ -261,13 +264,10 @@ function renderWarn(r: Refs, stats: StoreStats): void {
 }
 
 function renderTagOptions(r: Refs, stats: StoreStats): void {
-  const current = state.tag
-  r.tagSelect.textContent = ''
-  r.tagSelect.appendChild(option('', '全部标签'))
-  const tags = stats.tags
-  for (const t of tags) r.tagSelect.appendChild(option(t.tag, `${t.tag} (${t.count})`))
-  r.tagSelect.value = tags.some((t) => t.tag === current) ? current : ''
-  if (r.tagSelect.value !== current) state.tag = r.tagSelect.value
+  // 当前筛选标签在全库已不存在（记录被他处修改）→ 回落为全部
+  if (state.tag && !stats.tags.some((t) => t.tag === state.tag)) state.tag = ''
+  // 输入中不回写，避免 data-changed 重渲染打断输入
+  if (document.activeElement !== r.tagFilter) r.tagFilter.value = state.tag
 
   const sceneCurrent = state.scene
   r.sceneSelect.textContent = ''
@@ -354,11 +354,6 @@ function renderTable(r: Refs): void {
       userLine.appendChild(mark)
     }
     tdUser.appendChild(userLine)
-    if (rec.firstSeen?.url) {
-      const sub = h('div', 'brmk-cell-sub', truncate(rec.firstSeen.url, 42))
-      sub.title = rec.firstSeen.url
-      tdUser.appendChild(sub)
-    }
     tr.appendChild(tdUser)
 
     const tdMid = document.createElement('td')
@@ -1061,11 +1056,23 @@ function bind(r: Refs): void {
     renderAll()
   })
 
-  r.tagSelect.addEventListener('change', () => {
-    state.tag = r.tagSelect.value
-    state.page = 1
-    renderTable(r)
+  tagCombo?.dispose()
+  tagCombo = attachCombobox({
+    input: r.tagFilter,
+    mode: 'pick',
+    emptyText: '无匹配标签',
+    getItems: () => [
+      { value: '', label: '全部标签', emptyMatchOnly: true, disabled: state.tag === '' },
+      ...store.allTags().map((t) => ({ value: t.tag, disabled: t.tag === state.tag })),
+    ],
+    onPick: (value) => {
+      state.tag = value
+      state.page = 1
+      r.tagFilter.value = value
+      renderTable(r)
+    },
   })
+
   r.sceneSelect.addEventListener('change', () => {
     state.scene = r.sceneSelect.value
     state.page = 1
@@ -1102,6 +1109,7 @@ function bind(r: Refs): void {
 
   const onKey = (ev: KeyboardEvent): void => {
     if (!refs) return
+    if (ev.key === 'Escape' && tagCombo?.closeIfOpen()) return
     if (!refs.subHost.contains(document.activeElement) && ev.key === 'Escape') {
       if (refs.subHost.style.display === 'flex') {
         hideSub()
@@ -1187,8 +1195,13 @@ function buildShell(): Refs {
   listView.style.minHeight = '0'
 
   const toolbar = h('div', 'brmk-toolbar')
-  const tagSelect = h('select')
-  tagSelect.setAttribute('data-field', 'tag')
+  const tagBox = h('div', 'brmk-tagbox')
+  const tagFilter = h('input', 'brmk-tagfilter')
+  tagFilter.type = 'text'
+  tagFilter.setAttribute('data-field', 'tag')
+  tagFilter.placeholder = '全部标签'
+  tagFilter.setAttribute('aria-label', '按标签筛选')
+  tagBox.appendChild(tagFilter)
   const sceneSelect = h('select')
   sceneSelect.setAttribute('data-field', 'scene')
   const noteSelect = h('select')
@@ -1205,7 +1218,7 @@ function buildShell(): Refs {
   sortSelect.value = 'updatedAt'
   const dirBtn = btn('↓ 降序', 'brmk-btn', () => {})
   dirBtn.setAttribute('data-act', 'sortdir')
-  toolbar.append(tagSelect, sceneSelect, noteSelect, sortSelect, dirBtn, h('span', 'brmk-spacer'))
+  toolbar.append(tagBox, sceneSelect, noteSelect, sortSelect, dirBtn, h('span', 'brmk-spacer'))
 
   const batchBar = h('div', 'brmk-toolbar')
   batchBar.style.display = 'none'
@@ -1260,7 +1273,7 @@ function buildShell(): Refs {
     listView,
     settingsView,
     toolbar,
-    tagSelect,
+    tagFilter,
     sceneSelect,
     noteSelect,
     sortSelect,
@@ -1323,6 +1336,8 @@ export function closeManager(): void {
   document.body.style.overflow = prevOverflow
   unbindBus?.()
   unbindBus = null
+  tagCombo?.dispose()
+  tagCombo = null
   if (keyHandler) {
     document.removeEventListener('keydown', keyHandler)
     keyHandler = null

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliRemark
 // @namespace    https://github.com/YoinSama/BiliRemark
-// @version      1.7.6
+// @version      1.7.7
 // @author       Yoin
 // @description  B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。
 // @license      MIT
@@ -26,7 +26,7 @@
 
 (function() {
 	"use strict";
-	var VERSION = "1.7.6";
+	var VERSION = "1.7.7";
 	var STORAGE = {
 		data: "brmk.data.v1",
 		settings: "brmk.settings.v1",
@@ -877,6 +877,17 @@
 				tags
 			};
 		}
+		allTags() {
+			const lastUsed = new Map();
+			for (const rec of this.all()) for (const tag of rec.tags) {
+				const prev = lastUsed.get(tag) ?? 0;
+				if (rec.updatedAt > prev) lastUsed.set(tag, rec.updatedAt);
+			}
+			return Array.from(lastUsed.entries()).map(([tag, lastUsedAt]) => ({
+				tag,
+				lastUsedAt
+			})).sort((a, b) => b.lastUsedAt - a.lastUsedAt || a.tag.localeCompare(b.tag, "zh-Hans-CN"));
+		}
 		backupNow(reason) {
 			try {
 				GM_setValue(`${STORAGE.backupPrefix}${reason}.${now()}`, JSON.stringify(this.data));
@@ -1111,6 +1122,163 @@
 		svg.appendChild(path);
 		return svg;
 	}
+	var MENU_MAX_HEIGHT = 180;
+	var EDGE_MARGIN = 8;
+	var uid = 0;
+	function attachCombobox(config) {
+		const { input, mode, getItems, onPick, emptyText } = config;
+		const id = `brmk-cb-${++uid}`;
+		const menu = h("div", "brmk-tag-menu");
+		menu.id = id;
+		menu.setAttribute("role", "listbox");
+		menu.style.display = "none";
+		const host = input.parentElement;
+		if (!host) throw new Error("[BiliRemark] combobox 需要 input 有定位父级（.brmk-tagbox）");
+		host.appendChild(menu);
+		input.setAttribute("role", "combobox");
+		input.setAttribute("aria-expanded", "false");
+		input.setAttribute("aria-controls", id);
+		input.setAttribute("aria-autocomplete", "list");
+		let open = false;
+		let typed = false;
+		let highlight = -1;
+		let visible = [];
+		let itemEls = [];
+		const place = () => {
+			const rect = input.getBoundingClientRect();
+			const needed = Math.min(menu.scrollHeight, MENU_MAX_HEIGHT) + EDGE_MARGIN;
+			const below = window.innerHeight - rect.bottom;
+			menu.classList.toggle("up", below < needed && rect.top > below);
+		};
+		const setHighlight = (index) => {
+			highlight = index;
+			itemEls.forEach((el, i) => {
+				if (i === index) el.setAttribute("aria-selected", "true");
+				else el.removeAttribute("aria-selected");
+			});
+			const el = index >= 0 ? itemEls[index] : null;
+			if (el) {
+				input.setAttribute("aria-activedescendant", el.id);
+				el.scrollIntoView({ block: "nearest" });
+			} else input.removeAttribute("aria-activedescendant");
+		};
+		const renderMenu = () => {
+			const query = typed ? input.value.trim().toLowerCase() : "";
+			visible = getItems().filter((item) => {
+				if (!query) return true;
+				if (item.emptyMatchOnly) return false;
+				return item.value.toLowerCase().includes(query);
+			});
+			if (query) visible = visible.map((item) => ({
+				item,
+				prefix: item.value.toLowerCase().startsWith(query)
+			})).sort((a, b) => Number(b.prefix) - Number(a.prefix)).map((entry) => entry.item);
+			menu.textContent = "";
+			itemEls = [];
+			visible.forEach((item, index) => {
+				const el = h("div", "brmk-tag-item", item.label ?? item.value);
+				el.id = `${id}-opt-${index}`;
+				el.setAttribute("role", "option");
+				if (item.disabled) el.setAttribute("aria-disabled", "true");
+				el.addEventListener("pointerdown", (ev) => {
+					ev.preventDefault();
+					if (!item.disabled) pick(item.value);
+				});
+				menu.appendChild(el);
+				itemEls.push(el);
+			});
+			if (!visible.length) menu.appendChild(h("div", "brmk-tag-empty", emptyText));
+			place();
+			setHighlight(-1);
+		};
+		const setOpen = (next) => {
+			if (next === open) return;
+			if (next && input.disabled) return;
+			open = next;
+			if (open) {
+				typed = false;
+				renderMenu();
+				menu.style.display = "block";
+				input.setAttribute("aria-expanded", "true");
+			} else {
+				menu.style.display = "none";
+				input.setAttribute("aria-expanded", "false");
+				input.removeAttribute("aria-activedescendant");
+				highlight = -1;
+			}
+		};
+		const pick = (value) => {
+			setOpen(false);
+			onPick(value);
+		};
+		const moveHighlight = (dir) => {
+			if (!visible.length) return;
+			let index = highlight;
+			for (let step = 0; step < visible.length; step++) {
+				index = (index + dir + visible.length) % visible.length;
+				if (!visible[index].disabled) {
+					setHighlight(index);
+					return;
+				}
+			}
+		};
+		input.addEventListener("keydown", (ev) => {
+			if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+			if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+				ev.preventDefault();
+				if (!open) {
+					setOpen(true);
+					highlight = ev.key === "ArrowDown" ? -1 : visible.length;
+					moveHighlight(ev.key === "ArrowDown" ? 1 : -1);
+					return;
+				}
+				moveHighlight(ev.key === "ArrowDown" ? 1 : -1);
+			} else if (ev.key === "Enter" && open) {
+				const target = highlight >= 0 ? visible[highlight] : void 0;
+				const chosen = target && !target.disabled ? target : mode === "pick" ? visible.find((it) => !it.disabled) : void 0;
+				if (chosen) {
+					ev.preventDefault();
+					ev.stopImmediatePropagation();
+					pick(chosen.value);
+				}
+			}
+		});
+		input.addEventListener("input", () => {
+			if (!open) setOpen(true);
+			typed = true;
+			renderMenu();
+		});
+		input.addEventListener("focus", () => {
+			if (open) return;
+			setOpen(true);
+			if (input.value) input.select();
+		});
+		input.addEventListener("click", () => {
+			if (!open) setOpen(true);
+		});
+		input.addEventListener("blur", () => setOpen(false));
+		const onDocPointerDown = (ev) => {
+			if (!open) return;
+			const target = ev.target;
+			if (target && target !== input && !menu.contains(target)) setOpen(false);
+		};
+		document.addEventListener("pointerdown", onDocPointerDown, true);
+		return {
+			closeIfOpen: () => {
+				if (!open) return false;
+				setOpen(false);
+				return true;
+			},
+			dispose: () => {
+				document.removeEventListener("pointerdown", onDocPointerDown, true);
+				menu.remove();
+				input.removeAttribute("role");
+				input.removeAttribute("aria-expanded");
+				input.removeAttribute("aria-controls");
+				input.removeAttribute("aria-autocomplete");
+			}
+		};
+	}
 	var root$2 = null;
 	function ensureRoot() {
 		if (root$2 && root$2.isConnected) return root$2;
@@ -1226,14 +1394,16 @@
 		remarkInput.value = record?.remark ?? "";
 		remarkField.append(remarkLabel, remarkInput);
 		const tagField = h("div", "brmk-field");
-		const tagLabel = h("label", "brmk-label", `标签（≤${LIMITS.tags} 个，回车添加）`);
+		const tagLabel = h("label", "brmk-label", `标签（≤${LIMITS.tags} 个）`);
 		const chips = h("div", "brmk-chips");
+		const tagBox = h("div", "brmk-tagbox");
 		const tagInput = h("input", "brmk-input");
 		tagInput.type = "text";
 		tagInput.maxLength = LIMITS.tag;
-		tagInput.placeholder = tags.length >= LIMITS.tags ? "已达标签上限" : "输入后按回车";
+		tagInput.placeholder = tags.length >= LIMITS.tags ? "已达标签上限" : "输入筛选已有标签，回车新建";
 		tagInput.setAttribute("data-field", "tag");
-		tagField.append(tagLabel, chips, tagInput);
+		tagBox.appendChild(tagInput);
+		tagField.append(tagLabel, chips, tagBox);
 		const renderChips = () => {
 			chips.textContent = "";
 			tags.forEach((tag, index) => {
@@ -1249,32 +1419,51 @@
 				chips.appendChild(chip);
 			});
 			tagInput.disabled = tags.length >= LIMITS.tags;
-			tagInput.placeholder = tags.length >= LIMITS.tags ? "已达标签上限" : "输入后按回车";
+			tagInput.placeholder = tags.length >= LIMITS.tags ? "已达标签上限" : "输入筛选已有标签，回车新建";
 		};
-		const addTag = () => {
-			const raw = tagInput.value.trim().replace(/[,，;；]/g, "");
-			tagInput.value = "";
-			if (!raw) return;
+		const commitTag = (raw) => {
+			const cleaned = raw.trim().replace(/[,，;；]/g, "");
+			if (!cleaned) return;
 			if (tags.length >= LIMITS.tags) {
 				toast(`最多 ${LIMITS.tags} 个标签`);
 				return;
 			}
-			const tag = truncate(raw, LIMITS.tag);
+			const tag = truncate(cleaned, LIMITS.tag);
 			if (tags.includes(tag)) return;
 			tags.push(tag);
 			renderChips();
 		};
+		const tagSuggestions = store.allTags();
+		const tagCombo = attachCombobox({
+			input: tagInput,
+			mode: "create",
+			emptyText: "无匹配标签，回车直接创建",
+			getItems: () => tagSuggestions.map((s) => ({
+				value: s.tag,
+				disabled: tags.includes(s.tag)
+			})),
+			onPick: (value) => {
+				commitTag(value);
+				tagInput.value = "";
+			}
+		});
+		cleanupFns.push(tagCombo.dispose);
 		tagInput.addEventListener("keydown", (ev) => {
 			if (ev.key === "Enter" || ev.key === "," || ev.key === "，") {
 				ev.preventDefault();
-				addTag();
+				commitTag(tagInput.value);
+				tagInput.value = "";
+				tagCombo.closeIfOpen();
 			} else if (ev.key === "Backspace" && !tagInput.value && tags.length) {
 				tags.pop();
 				renderChips();
 			}
 		});
 		tagInput.addEventListener("blur", () => {
-			if (tagInput.value.trim()) addTag();
+			if (tagInput.value.trim()) {
+				commitTag(tagInput.value);
+				tagInput.value = "";
+			}
 		});
 		renderChips();
 		const colorField = h("div", "brmk-field");
@@ -1396,6 +1585,7 @@
 		const onKey = (ev) => {
 			if (ev.key === "Escape") {
 				ev.stopPropagation();
+				if (tagCombo.closeIfOpen()) return;
 				closeEditor();
 			}
 		};
@@ -2047,6 +2237,26 @@
   background:${p.accentWeak}; color:${p.accent}; border:1px solid ${p.accentBorder};
 }
 .brmk-chip button{ border:0; background:transparent; color:inherit; cursor:pointer; font-size:12px; line-height:1; padding:0 0 0 1px; }
+/* 标签 combobox（编辑器标签输入 + 管理页标签筛选共用结构；配色按所在弹层各自作用域） */
+.brmk-tagbox{ position:relative; }
+.brmk-tag-menu{
+  position:absolute; top:calc(100% + 4px); left:0; right:0; z-index:6;
+  max-height:180px; overflow-y:auto; overscroll-behavior:contain;
+  padding:4px; border-radius:8px;
+}
+.brmk-tag-menu.up{ top:auto; bottom:calc(100% + 4px); }
+.brmk-tag-item{
+  padding:5px 8px; border-radius:6px; font-size:12px; line-height:18px; cursor:pointer;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.brmk-tag-item[aria-disabled="true"]{ cursor:default; opacity:.5; }
+.brmk-tag-empty{ padding:6px 8px; font-size:12px; }
+#brmk-editor .brmk-tag-menu{ background:${p.bg}; border:1px solid ${p.border}; box-shadow:${p.shadow}; }
+#brmk-editor .brmk-tag-item{ color:${p.fg}; }
+#brmk-editor .brmk-tag-item:hover,#brmk-editor .brmk-tag-item[aria-selected="true"]{ background:${p.accentWeak}; color:${p.accent}; }
+#brmk-editor .brmk-tag-item[aria-disabled="true"]{ color:${p.fg2}; }
+#brmk-editor .brmk-tag-item[aria-disabled="true"]:hover{ background:transparent; color:${p.fg2}; }
+#brmk-editor .brmk-tag-empty{ color:${p.fg2}; }
 .brmk-colors{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
 .brmk-swatch{
   width:18px; height:18px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0;
@@ -2227,6 +2437,17 @@
   height:28px; padding:0 6px; font-size:12px; border-radius:6px; border:1px solid var(--brmk-border);
   background:var(--brmk-bg2); color:var(--brmk-fg); outline:none;
 }
+#brmk-manager .brmk-tagfilter{
+  width:140px; height:28px; padding:0 8px; font-size:12px; border-radius:6px;
+  border:1px solid var(--brmk-border); background:var(--brmk-bg2); color:var(--brmk-fg); outline:none;
+}
+#brmk-manager .brmk-tagfilter:focus{ border-color:var(--brmk-accent); box-shadow:0 0 0 2px var(--brmk-accent-weak); }
+#brmk-manager .brmk-tag-menu{ background:var(--brmk-bg); border:1px solid var(--brmk-border); box-shadow:var(--brmk-shadow); }
+#brmk-manager .brmk-tag-item{ color:var(--brmk-fg); }
+#brmk-manager .brmk-tag-item:hover,#brmk-manager .brmk-tag-item[aria-selected="true"]{ background:var(--brmk-accent-weak); color:var(--brmk-accent); }
+#brmk-manager .brmk-tag-item[aria-disabled="true"]{ color:var(--brmk-fg2); }
+#brmk-manager .brmk-tag-item[aria-disabled="true"]:hover{ background:transparent; color:var(--brmk-fg2); }
+#brmk-manager .brmk-tag-empty{ color:var(--brmk-fg2); }
 #brmk-manager .brmk-spacer{ flex:1; }
 #brmk-manager .brmk-body{ flex:1 1 auto; overflow:auto; overscroll-behavior:contain; margin:0 18px; border:1px solid var(--brmk-border); border-radius:8px; }
 #brmk-manager table{ width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
@@ -4145,6 +4366,7 @@
 	};
 	var refs = null;
 	var unbindBus = null;
+	var tagCombo = null;
 	var prevOverflow = "";
 	var keyHandler = null;
 	var renderDebounce = null;
@@ -4279,13 +4501,8 @@
 		for (const msg of messages) r.warn.appendChild(h("div", "brmk-warn", msg));
 	}
 	function renderTagOptions(r, stats) {
-		const current = state.tag;
-		r.tagSelect.textContent = "";
-		r.tagSelect.appendChild(option("", "全部标签"));
-		const tags = stats.tags;
-		for (const t of tags) r.tagSelect.appendChild(option(t.tag, `${t.tag} (${t.count})`));
-		r.tagSelect.value = tags.some((t) => t.tag === current) ? current : "";
-		if (r.tagSelect.value !== current) state.tag = r.tagSelect.value;
+		if (state.tag && !stats.tags.some((t) => t.tag === state.tag)) state.tag = "";
+		if (document.activeElement !== r.tagFilter) r.tagFilter.value = state.tag;
 		const sceneCurrent = state.scene;
 		r.sceneSelect.textContent = "";
 		r.sceneSelect.appendChild(option("", "全部场景"));
@@ -4943,10 +5160,26 @@
 			state.tab = target.dataset.tab;
 			renderAll();
 		});
-		r.tagSelect.addEventListener("change", () => {
-			state.tag = r.tagSelect.value;
-			state.page = 1;
-			renderTable(r);
+		tagCombo?.dispose();
+		tagCombo = attachCombobox({
+			input: r.tagFilter,
+			mode: "pick",
+			emptyText: "无匹配标签",
+			getItems: () => [{
+				value: "",
+				label: "全部标签",
+				emptyMatchOnly: true,
+				disabled: state.tag === ""
+			}, ...store.allTags().map((t) => ({
+				value: t.tag,
+				disabled: t.tag === state.tag
+			}))],
+			onPick: (value) => {
+				state.tag = value;
+				state.page = 1;
+				r.tagFilter.value = value;
+				renderTable(r);
+			}
 		});
 		r.sceneSelect.addEventListener("change", () => {
 			state.scene = r.sceneSelect.value;
@@ -4981,6 +5214,7 @@
 		});
 		const onKey = (ev) => {
 			if (!refs) return;
+			if (ev.key === "Escape" && tagCombo?.closeIfOpen()) return;
 			if (!refs.subHost.contains(document.activeElement) && ev.key === "Escape") {
 				if (refs.subHost.style.display === "flex") {
 					hideSub();
@@ -5057,8 +5291,13 @@
 		listView.style.flex = "1 1 auto";
 		listView.style.minHeight = "0";
 		const toolbar = h("div", "brmk-toolbar");
-		const tagSelect = h("select");
-		tagSelect.setAttribute("data-field", "tag");
+		const tagBox = h("div", "brmk-tagbox");
+		const tagFilter = h("input", "brmk-tagfilter");
+		tagFilter.type = "text";
+		tagFilter.setAttribute("data-field", "tag");
+		tagFilter.placeholder = "全部标签";
+		tagFilter.setAttribute("aria-label", "按标签筛选");
+		tagBox.appendChild(tagFilter);
 		const sceneSelect = h("select");
 		sceneSelect.setAttribute("data-field", "scene");
 		const noteSelect = h("select");
@@ -5075,7 +5314,7 @@
 		sortSelect.value = "updatedAt";
 		const dirBtn = btn("↓ 降序", "brmk-btn", () => {});
 		dirBtn.setAttribute("data-act", "sortdir");
-		toolbar.append(tagSelect, sceneSelect, noteSelect, sortSelect, dirBtn, h("span", "brmk-spacer"));
+		toolbar.append(tagBox, sceneSelect, noteSelect, sortSelect, dirBtn, h("span", "brmk-spacer"));
 		const batchBar = h("div", "brmk-toolbar");
 		batchBar.style.display = "none";
 		batchBar.style.paddingTop = "0";
@@ -5131,7 +5370,7 @@
 			listView,
 			settingsView,
 			toolbar,
-			tagSelect,
+			tagFilter,
 			sceneSelect,
 			noteSelect,
 			sortSelect,
@@ -5188,6 +5427,8 @@
 		document.body.style.overflow = prevOverflow;
 		unbindBus?.();
 		unbindBus = null;
+		tagCombo?.dispose();
+		tagCombo = null;
 		if (keyHandler) {
 			document.removeEventListener("keydown", keyHandler);
 			keyHandler = null;

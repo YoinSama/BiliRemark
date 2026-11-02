@@ -4,6 +4,7 @@ import { faceOf } from '../core/runtime'
 import { store } from '../core/store'
 import type { SceneKey, UserRecord } from '../core/types'
 import { h, truncate } from '../util/dom'
+import { attachCombobox } from './combobox'
 import { toast } from './toast'
 
 export interface EditorOptions {
@@ -112,14 +113,16 @@ export function openEditor(options: EditorOptions = {}): void {
   remarkField.append(remarkLabel, remarkInput)
 
   const tagField = h('div', 'brmk-field')
-  const tagLabel = h('label', 'brmk-label', `标签（≤${LIMITS.tags} 个，回车添加）`)
+  const tagLabel = h('label', 'brmk-label', `标签（≤${LIMITS.tags} 个）`)
   const chips = h('div', 'brmk-chips')
+  const tagBox = h('div', 'brmk-tagbox')
   const tagInput = h('input', 'brmk-input')
   tagInput.type = 'text'
   tagInput.maxLength = LIMITS.tag
-  tagInput.placeholder = tags.length >= LIMITS.tags ? '已达标签上限' : '输入后按回车'
+  tagInput.placeholder = tags.length >= LIMITS.tags ? '已达标签上限' : '输入筛选已有标签，回车新建'
   tagInput.setAttribute('data-field', 'tag')
-  tagField.append(tagLabel, chips, tagInput)
+  tagBox.appendChild(tagInput)
+  tagField.append(tagLabel, chips, tagBox)
 
   const renderChips = (): void => {
     chips.textContent = ''
@@ -136,34 +139,56 @@ export function openEditor(options: EditorOptions = {}): void {
       chips.appendChild(chip)
     })
     tagInput.disabled = tags.length >= LIMITS.tags
-    tagInput.placeholder = tags.length >= LIMITS.tags ? '已达标签上限' : '输入后按回车'
+    tagInput.placeholder = tags.length >= LIMITS.tags ? '已达标签上限' : '输入筛选已有标签，回车新建'
   }
 
-  const addTag = (): void => {
-    const raw = tagInput.value.trim().replace(/[,，;；]/g, '')
-    tagInput.value = ''
-    if (!raw) return
+  /** 清洗并落入一个标签：剔逗号分号、截断、去重、上限提示；输入框清理由调用方负责 */
+  const commitTag = (raw: string): void => {
+    const cleaned = raw.trim().replace(/[,，;；]/g, '')
+    if (!cleaned) return
     if (tags.length >= LIMITS.tags) {
       toast(`最多 ${LIMITS.tags} 个标签`)
       return
     }
-    const tag = truncate(raw, LIMITS.tag)
+    const tag = truncate(cleaned, LIMITS.tag)
     if (tags.includes(tag)) return
     tags.push(tag)
     renderChips()
   }
 
+  // 全库标签快照（最近使用优先），编辑器生命周期内不刷新。
+  // 必须先于下方 tagInput 的 keydown 监听注册：有高亮项时 Enter 由 combobox 拦截，
+  // 否则这里的 Enter 会先把输入文本当新标签提交
+  const tagSuggestions = store.allTags()
+  const tagCombo = attachCombobox({
+    input: tagInput,
+    mode: 'create',
+    emptyText: '无匹配标签，回车直接创建',
+    getItems: () => tagSuggestions.map((s) => ({ value: s.tag, disabled: tags.includes(s.tag) })),
+    onPick: (value) => {
+      commitTag(value)
+      tagInput.value = ''
+    },
+  })
+  cleanupFns.push(tagCombo.dispose)
+
   tagInput.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' || ev.key === ',' || ev.key === '，') {
       ev.preventDefault()
-      addTag()
+      commitTag(tagInput.value)
+      tagInput.value = ''
+      // 本次输入意图已完成（combobox 拦截的高亮采纳走不到这里），收起菜单
+      tagCombo.closeIfOpen()
     } else if (ev.key === 'Backspace' && !tagInput.value && tags.length) {
       tags.pop()
       renderChips()
     }
   })
   tagInput.addEventListener('blur', () => {
-    if (tagInput.value.trim()) addTag()
+    if (tagInput.value.trim()) {
+      commitTag(tagInput.value)
+      tagInput.value = ''
+    }
   })
   renderChips()
 
@@ -305,6 +330,7 @@ export function openEditor(options: EditorOptions = {}): void {
   const onKey = (ev: KeyboardEvent): void => {
     if (ev.key === 'Escape') {
       ev.stopPropagation()
+      if (tagCombo.closeIfOpen()) return
       closeEditor()
     }
   }

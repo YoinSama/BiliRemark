@@ -401,6 +401,23 @@ class RemarkStore {
     return { count: list.length, bytes, monthAdded, tags }
   }
 
+  /**
+   * 全库标签聚合（最近使用优先）：lastUsedAt 取携带该标签记录的最大 updatedAt。
+   * 供标签下拉建议用 —— 与 stats() 不同，没有 stringify 重开销，编辑器每次打开可安全调用。
+   */
+  allTags(): { tag: string; lastUsedAt: number }[] {
+    const lastUsed = new Map<string, number>()
+    for (const rec of this.all()) {
+      for (const tag of rec.tags) {
+        const prev = lastUsed.get(tag) ?? 0
+        if (rec.updatedAt > prev) lastUsed.set(tag, rec.updatedAt)
+      }
+    }
+    return Array.from(lastUsed.entries())
+      .map(([tag, lastUsedAt]) => ({ tag, lastUsedAt }))
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt || a.tag.localeCompare(b.tag, 'zh-Hans-CN'))
+  }
+
   /** 导出/导入前留一份自动备份，避免误操作不可回滚 */
   backupNow(reason: string): void {
     try {
