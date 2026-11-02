@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliRemark
 // @namespace    https://github.com/YoinSama/BiliRemark
-// @version      1.7.7
+// @version      1.7.8
 // @author       Yoin
 // @description  B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。
 // @license      MIT
@@ -26,7 +26,7 @@
 
 (function() {
 	"use strict";
-	var VERSION = "1.7.7";
+	var VERSION = "1.7.8";
 	var STORAGE = {
 		data: "brmk.data.v1",
 		settings: "brmk.settings.v1",
@@ -2460,7 +2460,6 @@
 #brmk-manager tbody tr:hover td{ background:var(--brmk-accent-weak); }
 #brmk-manager tbody tr:last-child td{ border-bottom:0; }
 #brmk-manager .brmk-cell-main{ font-weight:500; }
-#brmk-manager .brmk-cell-sub{ font-size:11px; color:var(--brmk-fg2); margin-top:1px; }
 #brmk-manager .brmk-mid{
   font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px;
   color:var(--brmk-fg2); cursor:pointer; border:0; background:transparent; padding:0;
@@ -4574,11 +4573,6 @@
 				userLine.appendChild(mark);
 			}
 			tdUser.appendChild(userLine);
-			if (rec.firstSeen?.url) {
-				const sub = h("div", "brmk-cell-sub", truncate(rec.firstSeen.url, 42));
-				sub.title = rec.firstSeen.url;
-				tdUser.appendChild(sub);
-			}
 			tr.appendChild(tdUser);
 			const tdMid = document.createElement("td");
 			const midBtn = h("button", "brmk-mid", rec.mid);
