@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliRemark
 // @namespace    https://github.com/YoinSama/BiliRemark
-// @version      1.7.8
+// @version      1.7.9
 // @author       Yoin
 // @description  B 站网页端本地用户备注：给 UP 主 / 评论者打只属于你自己的备注，数据不出本机。
 // @license      MIT
@@ -26,7 +26,7 @@
 
 (function() {
 	"use strict";
-	var VERSION = "1.7.8";
+	var VERSION = "1.7.9";
 	var STORAGE = {
 		data: "brmk.data.v1",
 		settings: "brmk.settings.v1",
@@ -2448,6 +2448,25 @@
 #brmk-manager .brmk-tag-item[aria-disabled="true"]{ color:var(--brmk-fg2); }
 #brmk-manager .brmk-tag-item[aria-disabled="true"]:hover{ background:transparent; color:var(--brmk-fg2); }
 #brmk-manager .brmk-tag-empty{ color:var(--brmk-fg2); }
+/* 空间侧栏备注卡：固定浅色卡面 + data-brmk-sp-theme 深色覆盖（菜单用实底，卡片自身的半透明底会透字） */
+#brmk-space-card .brmk-tag-menu{ background:#fff; border:1px solid #e3e5e7; box-shadow:0 8px 32px rgba(0,0,0,.16); }
+#brmk-space-card .brmk-tag-item{ color:#18191c; }
+#brmk-space-card .brmk-tag-item:hover,#brmk-space-card .brmk-tag-item[aria-selected="true"]{
+  background:color-mix(in srgb, var(--brmk-sp-c, ${p.accent}) 13%, transparent);
+  color:var(--brmk-sp-c, ${p.accent});
+}
+#brmk-space-card .brmk-tag-item[aria-disabled="true"]{ color:#9499a0; }
+#brmk-space-card .brmk-tag-item[aria-disabled="true"]:hover{ background:transparent; color:#9499a0; }
+#brmk-space-card .brmk-tag-empty{ color:#9499a0; }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-tag-menu{
+  background:#242529; border-color:rgba(255,255,255,.14); box-shadow:0 8px 32px rgba(0,0,0,.55);
+}
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-tag-item{ color:#f1f1f3; }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-tag-item:hover,
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-tag-item[aria-selected="true"]{ background:rgba(255,255,255,.06); }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-tag-item[aria-disabled="true"]{ color:rgba(255,255,255,.45); }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-tag-item[aria-disabled="true"]:hover{ background:transparent; color:rgba(255,255,255,.45); }
+#brmk-space-card[data-brmk-sp-theme="dark"] .brmk-tag-empty{ color:rgba(255,255,255,.45); }
 #brmk-manager .brmk-spacer{ flex:1; }
 #brmk-manager .brmk-body{ flex:1 1 auto; overflow:auto; overscroll-behavior:contain; margin:0 18px; border:1px solid var(--brmk-border); border-radius:8px; }
 #brmk-manager table{ width:100%; border-collapse:separate; border-spacing:0; font-size:13px; }
@@ -3950,6 +3969,7 @@
 	var editing = false;
 	var lastSig = "";
 	var draftTags = [];
+	var tagCombo$1 = null;
 	var refreshView = null;
 	function isSpacePage() {
 		if (!SPACE_HOST_RE.test(location.hostname) && !document.documentElement.hasAttribute(FIXTURE_ATTR)) return false;
@@ -4036,6 +4056,8 @@
 		].join("");
 	}
 	function destroy() {
+		tagCombo$1?.dispose();
+		tagCombo$1 = null;
 		card?.remove();
 		card = null;
 		cardMid = "";
@@ -4094,13 +4116,15 @@
 		remarkInput.maxLength = LIMITS.remark;
 		remarkInput.placeholder = "例如：老番茄 / 某某的另一个号";
 		remarkInput.setAttribute("data-field", "remark");
-		const tagLabel = h("label", "brmk-sp-label", `标签（≤${LIMITS.tags} 个，回车添加）`);
+		const tagLabel = h("label", "brmk-sp-label", `标签（≤${LIMITS.tags} 个）`);
 		const chips = h("div", "brmk-sp-chips");
+		const tagBox = h("div", "brmk-tagbox");
 		const tagInput = h("input", "brmk-sp-input");
 		tagInput.type = "text";
 		tagInput.maxLength = LIMITS.tag;
-		tagInput.placeholder = "输入后按回车";
+		tagInput.placeholder = "输入筛选已有标签，回车新建";
 		tagInput.setAttribute("data-field", "tag");
+		tagBox.appendChild(tagInput);
 		const noteLabel = h("label", "brmk-sp-label", `长文本备注（≤${LIMITS.note} 字，仅自己可见）`);
 		const noteInput = h("textarea", "brmk-sp-textarea");
 		noteInput.maxLength = LIMITS.note;
@@ -4117,7 +4141,7 @@
 		saveBtn.type = "button";
 		saveBtn.setAttribute("data-act", "save");
 		actions.append(cancelBtn, saveBtn);
-		editor.append(remarkLabel, remarkInput, tagLabel, chips, tagInput, noteLabel, noteInput, counter, actions);
+		editor.append(remarkLabel, remarkInput, tagLabel, chips, tagBox, noteLabel, noteInput, counter, actions);
 		el.append(head, view, empty, editor);
 		const anchor = announcementAnchor(host);
 		if (anchor) host.insertBefore(el, anchor);
@@ -4139,17 +4163,16 @@
 				chips.appendChild(chip);
 			});
 			tagInput.disabled = draftTags.length >= LIMITS.tags;
-			tagInput.placeholder = draftTags.length >= LIMITS.tags ? "已达标签上限" : "输入后按回车";
+			tagInput.placeholder = draftTags.length >= LIMITS.tags ? "已达标签上限" : "输入筛选已有标签，回车新建";
 		};
-		const addTag = () => {
-			const raw = tagInput.value.trim().replace(/[,，;；]/g, "");
-			tagInput.value = "";
-			if (!raw) return;
+		const commitTag = (raw) => {
+			const cleaned = raw.trim().replace(/[,，;；]/g, "");
+			if (!cleaned) return;
 			if (draftTags.length >= LIMITS.tags) {
 				toast(`最多 ${LIMITS.tags} 个标签`);
 				return;
 			}
-			const tag = raw.slice(0, LIMITS.tag);
+			const tag = cleaned.slice(0, LIMITS.tag);
 			if (draftTags.includes(tag)) return;
 			draftTags.push(tag);
 			renderChips();
@@ -4246,22 +4269,42 @@
 		});
 		cancelBtn.addEventListener("click", exitEdit);
 		saveBtn.addEventListener("click", doSave);
+		tagCombo$1?.dispose();
+		tagCombo$1 = attachCombobox({
+			input: tagInput,
+			mode: "create",
+			emptyText: "无匹配标签，回车直接创建",
+			getItems: () => store.allTags().map((s) => ({
+				value: s.tag,
+				disabled: draftTags.includes(s.tag)
+			})),
+			onPick: (value) => {
+				commitTag(value);
+				tagInput.value = "";
+			}
+		});
 		tagInput.addEventListener("keydown", (ev) => {
 			if (ev.key === "Enter" || ev.key === "," || ev.key === "，") {
 				ev.preventDefault();
-				addTag();
+				commitTag(tagInput.value);
+				tagInput.value = "";
+				tagCombo$1?.closeIfOpen();
 			} else if (ev.key === "Backspace" && !tagInput.value && draftTags.length) {
 				draftTags.pop();
 				renderChips();
 			}
 		});
 		tagInput.addEventListener("blur", () => {
-			if (tagInput.value.trim()) addTag();
+			if (tagInput.value.trim()) {
+				commitTag(tagInput.value);
+				tagInput.value = "";
+			}
 		});
 		noteInput.addEventListener("input", syncCount);
 		el.addEventListener("keydown", (ev) => {
 			if (ev.key === "Escape" && editing) {
 				ev.stopPropagation();
+				if (tagCombo$1?.closeIfOpen()) return;
 				exitEdit();
 			} else if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey) && editing) {
 				ev.preventDefault();

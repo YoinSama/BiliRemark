@@ -8,6 +8,8 @@ import { formatDay } from '../util/format'
 import { h, qs, qsa, queryDeepAll } from '../util/dom'
 import { log, warn } from '../util/log'
 import { luminanceOf, readableOn } from '../core/env'
+import { attachCombobox } from '../ui/combobox'
+import type { ComboboxHandle } from '../ui/combobox'
 import { openEditor } from '../ui/editor'
 import { toast } from '../ui/toast'
 
@@ -37,6 +39,7 @@ let cardMid = ''
 let editing = false
 let lastSig = ''
 let draftTags: string[] = []
+let tagCombo: ComboboxHandle | null = null
 /** 由 mount 注册的查看态重绘函数；scan 里按签名决定是否调用 */
 let refreshView: (() => void) | null = null
 
@@ -131,6 +134,8 @@ function signatureOf(record: UserRecord | undefined): string {
 }
 
 function destroy(): void {
+  tagCombo?.dispose()
+  tagCombo = null
   card?.remove()
   card = null
   cardMid = ''
@@ -202,13 +207,15 @@ function mount(host: Element, mid: string): HTMLElement {
   remarkInput.placeholder = '例如：老番茄 / 某某的另一个号'
   remarkInput.setAttribute('data-field', 'remark')
 
-  const tagLabel = h('label', 'brmk-sp-label', `标签（≤${LIMITS.tags} 个，回车添加）`)
+  const tagLabel = h('label', 'brmk-sp-label', `标签（≤${LIMITS.tags} 个）`)
   const chips = h('div', 'brmk-sp-chips')
+  const tagBox = h('div', 'brmk-tagbox')
   const tagInput = h('input', 'brmk-sp-input')
   tagInput.type = 'text'
   tagInput.maxLength = LIMITS.tag
-  tagInput.placeholder = '输入后按回车'
+  tagInput.placeholder = '输入筛选已有标签，回车新建'
   tagInput.setAttribute('data-field', 'tag')
+  tagBox.appendChild(tagInput)
 
   const noteLabel = h('label', 'brmk-sp-label', `长文本备注（≤${LIMITS.note} 字，仅自己可见）`)
   const noteInput = h('textarea', 'brmk-sp-textarea')
@@ -229,7 +236,7 @@ function mount(host: Element, mid: string): HTMLElement {
   saveBtn.setAttribute('data-act', 'save')
   actions.append(cancelBtn, saveBtn)
 
-  editor.append(remarkLabel, remarkInput, tagLabel, chips, tagInput, noteLabel, noteInput, counter, actions)
+  editor.append(remarkLabel, remarkInput, tagLabel, chips, tagBox, noteLabel, noteInput, counter, actions)
 
   el.append(head, view, empty, editor)
   const anchor = announcementAnchor(host)
@@ -256,18 +263,18 @@ function mount(host: Element, mid: string): HTMLElement {
       chips.appendChild(chip)
     })
     tagInput.disabled = draftTags.length >= LIMITS.tags
-    tagInput.placeholder = draftTags.length >= LIMITS.tags ? '已达标签上限' : '输入后按回车'
+    tagInput.placeholder = draftTags.length >= LIMITS.tags ? '已达标签上限' : '输入筛选已有标签，回车新建'
   }
 
-  const addTag = (): void => {
-    const raw = tagInput.value.trim().replace(/[,，;；]/g, '')
-    tagInput.value = ''
-    if (!raw) return
+  /** 清洗并落入一个标签：剔逗号分号、截断、去重、上限提示；输入框清理由调用方负责 */
+  const commitTag = (raw: string): void => {
+    const cleaned = raw.trim().replace(/[,，;；]/g, '')
+    if (!cleaned) return
     if (draftTags.length >= LIMITS.tags) {
       toast(`最多 ${LIMITS.tags} 个标签`)
       return
     }
-    const tag = raw.slice(0, LIMITS.tag)
+    const tag = cleaned.slice(0, LIMITS.tag)
     if (draftTags.includes(tag)) return
     draftTags.push(tag)
     renderChips()
@@ -368,23 +375,46 @@ function mount(host: Element, mid: string): HTMLElement {
   cancelBtn.addEventListener('click', exitEdit)
   saveBtn.addEventListener('click', doSave)
 
+  // 标签下拉（全库标签实时取 allTags，卡片生命周期长于编辑器不走快照）。
+  // 必须先于下方 tagInput 的 keydown 监听注册：有高亮项时 Enter 由 combobox 拦截，
+  // 否则这里的 Enter 会先把输入文本当新标签提交
+  tagCombo?.dispose()
+  tagCombo = attachCombobox({
+    input: tagInput,
+    mode: 'create',
+    emptyText: '无匹配标签，回车直接创建',
+    getItems: () => store.allTags().map((s) => ({ value: s.tag, disabled: draftTags.includes(s.tag) })),
+    onPick: (value) => {
+      commitTag(value)
+      tagInput.value = ''
+    },
+  })
+
   tagInput.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' || ev.key === ',' || ev.key === '，') {
       ev.preventDefault()
-      addTag()
+      commitTag(tagInput.value)
+      tagInput.value = ''
+      // 本次输入意图已完成（combobox 拦截的高亮采纳走不到这里），收起菜单
+      tagCombo?.closeIfOpen()
     } else if (ev.key === 'Backspace' && !tagInput.value && draftTags.length) {
       draftTags.pop()
       renderChips()
     }
   })
   tagInput.addEventListener('blur', () => {
-    if (tagInput.value.trim()) addTag()
+    if (tagInput.value.trim()) {
+      commitTag(tagInput.value)
+      tagInput.value = ''
+    }
   })
   noteInput.addEventListener('input', syncCount)
 
   el.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape' && editing) {
       ev.stopPropagation()
+      // 标签下拉开着时先只关下拉（本监听在冒泡层，晚于 input 上的监听，安全）
+      if (tagCombo?.closeIfOpen()) return
       exitEdit()
     } else if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey) && editing) {
       ev.preventDefault()
